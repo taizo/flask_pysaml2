@@ -59,18 +59,18 @@ class Saml(object):
 
         Args:
             next_url (string): HTTP URL to return user to when authentication
-                is complete
-            binding (Saml2 binding): Saml binding method to use for request,
+                is complete.
+            binding (binding): Saml2 binding method to use for request,
                 default BINDING_HTTP_REDIRECT (don't change til HTTP_POST
                 support is complete in pysaml2.
 
         Returns:
             Flask Response object to return to user containing either
-                HTTP_REDIRECT or HTTP_POST SAML message
+                HTTP_REDIRECT or HTTP_POST SAML message.
 
         Raises:
-            AuthException when unable to locate valid IdP
-            BadRequest when invalid result returned from SAML client
+            AuthException: when unable to locate valid IdP.
+            BadRequest: when invalid result returned from SAML client.
         """
         # find configured for IdP for requested binding method
         idp_entityid = ''
@@ -136,15 +136,15 @@ class Saml(object):
         """Handle SAML Authentication login assertion (POST).
 
         Args:
-            request (Request): Flask request object for this HTTP transaction
+            request (Request): Flask request object for this HTTP transaction.
 
         Returns:
             User Id (string), User attributes (dict), Redirect Flask response
-            object to return user to now that authentication is complete
+                object to return user to now that authentication is complete.
 
         Raises:
-            BadRequest when error with SAML response from Identity Provider
-            AuthException when unable to locate uid attribute in response
+            BadRequest: when error with SAML response from Identity Provider.
+            AuthException: when unable to locate uid attribute in response.
         """
         if not request.form.get('SAMLResponse'):
             raise BadRequest('SAMLResponse missing from POST')
@@ -202,15 +202,14 @@ class Saml(object):
 
         Args:
             next_url (string): HTTP URL to return user to when logout is
-                complete
+                complete.
 
         Returns:
             Flask Response object to return to user containing either
-                HTTP_REDIRECT or HTTP_POST SAML message
+                HTTP_REDIRECT or HTTP_POST SAML message.
 
         Raises:
-            AuthException when unable to resolve Identity Provider single
-                logout end-point
+            AuthException: when unable to resolve Identity Provider single logout end-point.
         """
         # retrieve cache
         state_cache = AuthDictCache(session, '_saml_state')
@@ -255,20 +254,20 @@ class Saml(object):
         """Handle SAML Authentication logout request (GET).
 
         Args:
-            client (Saml2Client): instance of SAML client class
-            request (Request): Flask request object for this HTTP transaction
+            client (Saml2Client): instance of SAML client class.
+            request (Request): Flask request object for this HTTP transaction.
             subject_id (string): Id of the subject we are processing the
-                logout for
+                logout for.
             binding (string): the SAML binding method being used for this
-                request
+                request.
 
         Returns:
             Flask Response object to return to user containing
-                HTTP_REDIRECT SAML message
+                HTTP_REDIRECT SAML message.
 
         Raises:
-            BadRequest when SAML request data is missong
-            AuthException when SAML request indicates logout failed
+            BadRequest: when SAML request data is missing.
+            AuthException: when SAML request indicates logout failed.
         """
         LOGGER.debug('Received a logout request from Identity Provider')
 
@@ -292,19 +291,19 @@ class Saml(object):
         """Handle SAML Authentication logout response (GET or POST).
 
         Args:
-            client (Saml2Client): instance of SAML client class
-            request (Request): Flask request object for this HTTP transaction
+            client (Saml2Client): instance of SAML client class.
+            request (Request): Flask request object for this HTTP transaction.
             binding (string): the SAML binding method being used for this
-                request
-            next_url (string): URL to get redirected to if all is successful
+                request.
+            next_url (string): URL to get redirected to if all is successful.
 
         Returns:
             Flask Response object to return to user containing
-                HTTP_REDIRECT SAML message
+                HTTP_REDIRECT SAML message.
 
         Raises:
-            BadRequest when SAML response data is missong
-            AuthException when SAML response indicates logout failed
+            BadRequest: when SAML response data is missing.
+            AuthException: when SAML response indicates logout failed.
         """
         LOGGER.debug('Received a logout response from Identity Provider')
         try:
@@ -332,16 +331,15 @@ class Saml(object):
         """Handle SAML Authentication logout request/response.
 
         Args:
-            request (Request): Flask request object for this HTTP transaction
-            next_url (string): URL to get redirected to if all is successful
+            request (Request): Flask request object for this HTTP transaction.
+            next_url (string): URL to get redirected to if all is successful.
 
         Returns:
-            (boolean) Success,
-            Flask Response object to return to user containing
-                HTTP_REDIRECT SAML message
+            (boolean) Success, Flask Response object to return to user
+                containing HTTP_REDIRECT SAML message.
 
         Raises:
-            BadRequest when SAML request/response data is missong
+            BadRequest: when SAML request/response data is missing.
         """
         # retrieve cache
         state_cache = AuthDictCache(session, '_saml_state')

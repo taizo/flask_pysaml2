@@ -1,0 +1,4 @@
+include README.rst LICENCE
+include requirements.txt requirements-testing.txt requirements-docs.txt
+recursive-include tests *.py *.xml *.crt *.key
+recursive-include docs *.py *.rst Makefile
