@@ -13,21 +13,22 @@ Copyright (c) 2012, Kavi Corporation
 License (Modified BSD License), see LICENSE for more details.
 """
 
-import logging
-from flask import (session, make_response, redirect)
-
 import os
+import logging
+
+from flask import (session, make_response, redirect)
 from werkzeug.exceptions import BadRequest
+
 from saml2 import BINDING_HTTP_REDIRECT, BINDING_HTTP_POST
 from saml2.client import Saml2Client
 from saml2.metadata import (entity_descriptor, sign_entity_descriptor)
-from saml2.config import SPConfig
+from saml2.config import SPConfig, IdPConfig
 from saml2.cache import Cache
 
-LOGGER = logging.getLogger('auth')
+LOGGER = logging.getLogger(__name__)
 
 class AuthException(Exception):
-    """Exception for Authentication errors (SAML)"""
+    """Exception for Authentication errors (SAML2)"""
     pass
 
 class Saml(object):
@@ -35,7 +36,7 @@ class Saml(object):
     """
     SAML Wrapper around pysaml2.
 
-    Implements SAML Service Provider functionality for Flask.
+    Implements SAML2 Service/Identity Provider functionality for Flask.
 
     TODO: Extend this class to also implement Identity Provider functionality.
     """
@@ -43,14 +44,18 @@ class Saml(object):
     attribute_map = dict()
 
     def __init__(self, config, attribute_map=None):
-        """Initialize SAML Service Provider.
+        """Initialize SAML Service/Identity Provider.
 
         Args:
             config (dict): Service Provider config info in dict form
             attribute_map (dict): Mapping of attribute keys to user data
         """
-        self._config = SPConfig()
-        self._config.load(config)
+        if config.get('service', {}).get('idp') is not None:
+            self._config = IdPConfig()
+            self._config.load(config)
+        else:
+            self._config = SPConfig()
+            self._config.load(config)
         if attribute_map is not None:
             self.attribute_map = attribute_map
 
@@ -385,6 +390,12 @@ class Saml(object):
         LOGGER.debug(
             'Returning redirect to complete/continue the logout process')
         return success, response
+
+    def handle_authn_request(self, request):
+        pass
+
+    def authn_response(self, userid):
+        pass
 
     def get_metadata(self):
         """Returns SAML Service Provider Metadata"""
