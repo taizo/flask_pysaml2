@@ -162,7 +162,7 @@ class TestSaml(unittest.TestCase):
         entity_id = 'https://foo.example.com/sp/metadata'
         with self.app.test_request_context('/',
                 method='GET'):
-            idp = auth.Saml(idp_config)
+            idp = auth.SamlServer(idp_config)
             self.assertEqual(idp._config.single_logout_services(
                 entity_id, BINDING_HTTP_REDIRECT),
                 ['https://foo.example.com/sp/slo'])
@@ -869,7 +869,7 @@ class TestSaml(unittest.TestCase):
         # test with defined private key file
         with self.app.test_request_context('/',
                 method='GET'):
-            idp = auth.Saml(tmp_idp_config)
+            idp = auth.SamlServer(tmp_idp_config)
             resp = idp.get_metadata()
             self.assertTrue(
                 'Content-type: text/xml; charset=utf-8' in str(resp.headers))
@@ -884,7 +884,7 @@ class TestSaml(unittest.TestCase):
         with self.app.test_request_context('/',
                 method='GET'):
             tmp_idp_config['key_file'] = None
-            idp = auth.Saml(tmp_idp_config)
+            idp = auth.SamlServer(tmp_idp_config)
             resp = idp.get_metadata()
             self.assertTrue(
                 'Content-type: text/xml; charset=utf-8' in str(resp.headers))
