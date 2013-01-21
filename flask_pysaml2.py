@@ -50,6 +50,17 @@ class Saml(object):
         """
         self._config = SPConfig()
         self._config.load(config)
+        if config['metadata'].get('config'):
+            # Hacked in a way to get the IdP metadata from a python dict
+            # rather than having to resort to loading XML from file or http.
+            idp_config = IdPConfig()
+            idp_config.load(config['metadata']['config'][0])
+            idp_entityid = config['metadata']['config'][0]['entityid']
+            idp_metadata_str = str(entity_descriptor(idp_config, 24))
+            LOGGER.debug('IdP XML Metadata for %s: %s' % (
+                idp_entityid, idp_metadata_str))
+            self._config.metadata.import_metadata(
+                idp_metadata_str, idp_entityid)
         self.attribute_map = {}
         if attribute_map is not None:
             self.attribute_map = attribute_map

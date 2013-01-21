@@ -158,6 +158,51 @@ class TestSaml(unittest.TestCase):
             self.assertEqual(sp._config.single_sign_on_services(entity_id),
                 ['https://sso.example.com/idp/sso'])
 
+    def test_Saml_init_idp_as_config(self):
+        tmp_sp_config = copy.deepcopy(sp_config)
+        entity_id = 'https://sso.example.com/idp/metadata'
+        tmp_sp_config['metadata'] = {
+            'config': [{
+                'entityid': entity_id,
+                'contact_person': [{
+                    'email_address': 'helpdesk@kavi.com',
+                    'type': 'technical',
+                }],
+                'service': {
+                    'idp': {
+                        'name': 'Test Identity Provider',
+                        'endpoints': {
+                            'single_sign_on_service': [(
+                                'https://sso.example.com/idp/sso',
+                                BINDING_HTTP_REDIRECT)],
+                            'single_logout_service': [(
+                                'https://sso.example.com/idp/slo',
+                                BINDING_HTTP_REDIRECT)],
+                        },
+                        'policy': {
+                            'default': {
+                                'lifetime': {'hours': 24},
+                                'attribute_restrictions': None,
+                                'name_form':
+                                    'urn:oasis:names:tc:SAML:2.0:attrname-format:uri',
+                            },
+                        },
+                    },
+                },
+                'cert_file': root_path + '/sso_public.crt',
+            }]
+        }
+        with self.app.test_request_context('/',
+                method='GET'):
+            sp = auth.Saml(tmp_sp_config)
+            self.assertEqual(sp._config.idps(),
+                {entity_id: 'https://sso.example.com/idp/sso'})
+            self.assertEqual(sp._config.single_logout_services(
+                entity_id, BINDING_HTTP_REDIRECT),
+                ['https://sso.example.com/idp/slo'])
+            self.assertEqual(sp._config.single_sign_on_services(entity_id),
+                ['https://sso.example.com/idp/sso'])
+
     def test_Saml_init_IdP(self):
         entity_id = 'https://foo.example.com/sp/metadata'
         with self.app.test_request_context('/',
