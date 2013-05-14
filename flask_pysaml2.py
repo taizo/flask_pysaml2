@@ -13,21 +13,24 @@ Copyright (c) 2012, Kavi Corporation
 License (Modified BSD License), see LICENSE for more details.
 """
 
-import logging
-from flask import (session, make_response, redirect)
-
 import os
+import logging
+
+from flask import (session, make_response, redirect)
 from werkzeug.exceptions import BadRequest
+
 from saml2 import BINDING_HTTP_REDIRECT, BINDING_HTTP_POST
 from saml2.client import Saml2Client
+from saml2.server import Server
 from saml2.metadata import (entity_descriptor, sign_entity_descriptor)
-from saml2.config import SPConfig
+from saml2.config import SPConfig, IdPConfig
 from saml2.cache import Cache
+from saml2.sigver import security_context
 
-LOGGER = logging.getLogger('auth')
+LOGGER = logging.getLogger(__name__)
 
 class AuthException(Exception):
-    """Exception for Authentication errors (SAML)"""
+    """Exception for Authentication errors (SAML2)"""
     pass
 
 class Saml(object):
@@ -35,12 +38,8 @@ class Saml(object):
     """
     SAML Wrapper around pysaml2.
 
-    Implements SAML Service Provider functionality for Flask.
-
-    TODO: Extend this class to also implement Identity Provider functionality.
+    Implements SAML2 Service Provider functionality for Flask.
     """
-
-    attribute_map = dict()
 
     def __init__(self, config, attribute_map=None):
         """Initialize SAML Service Provider.
@@ -51,6 +50,18 @@ class Saml(object):
         """
         self._config = SPConfig()
         self._config.load(config)
+        if config['metadata'].get('config'):
+            # Hacked in a way to get the IdP metadata from a python dict
+            # rather than having to resort to loading XML from file or http.
+            idp_config = IdPConfig()
+            idp_config.load(config['metadata']['config'][0])
+            idp_entityid = config['metadata']['config'][0]['entityid']
+            idp_metadata_str = str(entity_descriptor(idp_config, 24))
+            LOGGER.debug('IdP XML Metadata for %s: %s' % (
+                idp_entityid, idp_metadata_str))
+            self._config.metadata.import_metadata(
+                idp_metadata_str, idp_entityid)
+        self.attribute_map = {}
         if attribute_map is not None:
             self.attribute_map = attribute_map
 
@@ -390,8 +401,65 @@ class Saml(object):
         """Returns SAML Service Provider Metadata"""
         edesc = entity_descriptor(self._config, 24)
         if self._config.key_file:
-            client = Saml2Client(self._config, logger=LOGGER)
-            edesc = sign_entity_descriptor(edesc, 24, None, client.sec)
+            edesc = sign_entity_descriptor(edesc, 24, None, security_context(self._config))
+        response = make_response(str(edesc))
+        response.headers['Content-type'] = 'text/xml; charset=utf-8'
+        return response
+
+class SamlServer(object):
+    """
+    SAML Wrapper around pysaml2.
+
+    Implements SAML2 Identity Provider functionality for Flask.
+    """
+    def __init__(self, config, attribute_map=None):
+        """Initialize SAML Identity Provider.
+
+        Args:
+            config (dict): Identity Provider config info in dict form
+            attribute_map (dict): Mapping of attribute keys to user data
+        """
+        self._config = IdPConfig()
+        self._config.load(config)
+        self._server = Server(config=self._config)
+        self.attribute_map = {}
+        if attribute_map is not None:
+            self.attribute_map = attribute_map
+
+    def handle_authn_request(self, request, login_form_cb):
+        """Handles authentication request.
+
+        TODO: create default login_form_cb, with unstyled login form?
+
+        Args:
+            request (Request): Flask request object for this HTTP transaction.
+            login_form_cb (function): Function that displays login form with 
+                username and password fields. Takes a single parameter which
+                is the service_provider_id so the form may be styled accordingly.
+        """
+        if 'SAMLRequest' in request.values:
+            details = self._server.parse_authn_request(request.details,
+                BINDING_HTTP_REDIRECT)
+            # TODO: check session for already authenticated user
+            # and send authn_response immediately.
+            # TODO: otherwise render login form login_form_cb(service_provider_id)
+        else:
+            pass # TODO: bad request?
+
+    def get_service_provider_id(self, request):
+        # TODO: pull service_provider_id from session
+        pass
+
+    def authn_response(self, userid):
+        service_provider_id = get_service_provider_id()
+        # TODO: send authn_response
+        pass
+
+    def get_metadata(self):
+        """Returns SAML Identity Provider Metadata"""
+        edesc = entity_descriptor(self._config, 24)
+        if self._config.key_file:
+            edesc = sign_entity_descriptor(edesc, 24, None, security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
         return response

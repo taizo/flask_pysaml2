@@ -144,7 +144,7 @@ class TestSaml(unittest.TestCase):
         with self.app.test_request_context('/',
                 method='GET'):
             try:
-                sp = auth.Saml({'service': 'invalid'})
+                sp = auth.Saml({'service': {'sp':'invalid'}})
                 self.fail(
                     'Expected TypeError on invalid submission to Saml __init__')
             except TypeError:
@@ -157,6 +157,69 @@ class TestSaml(unittest.TestCase):
                 ['https://sso.example.com/idp/slo'])
             self.assertEqual(sp._config.single_sign_on_services(entity_id),
                 ['https://sso.example.com/idp/sso'])
+
+    def test_Saml_init_idp_as_config(self):
+        tmp_sp_config = copy.deepcopy(sp_config)
+        entity_id = 'https://sso.example.com/idp/metadata'
+        tmp_sp_config['metadata'] = {
+            'config': [{
+                'entityid': entity_id,
+                'contact_person': [{
+                    'email_address': 'helpdesk@kavi.com',
+                    'type': 'technical',
+                }],
+                'service': {
+                    'idp': {
+                        'name': 'Test Identity Provider',
+                        'endpoints': {
+                            'single_sign_on_service': [(
+                                'https://sso.example.com/idp/sso',
+                                BINDING_HTTP_REDIRECT)],
+                            'single_logout_service': [(
+                                'https://sso.example.com/idp/slo',
+                                BINDING_HTTP_REDIRECT)],
+                        },
+                        'policy': {
+                            'default': {
+                                'lifetime': {'hours': 24},
+                                'attribute_restrictions': None,
+                                'name_form':
+                                    'urn:oasis:names:tc:SAML:2.0:attrname-format:uri',
+                            },
+                        },
+                    },
+                },
+                'cert_file': root_path + '/sso_public.crt',
+            }]
+        }
+        with self.app.test_request_context('/',
+                method='GET'):
+            sp = auth.Saml(tmp_sp_config)
+            self.assertEqual(sp._config.idps(),
+                {entity_id: 'https://sso.example.com/idp/sso'})
+            self.assertEqual(sp._config.single_logout_services(
+                entity_id, BINDING_HTTP_REDIRECT),
+                ['https://sso.example.com/idp/slo'])
+            self.assertEqual(sp._config.single_sign_on_services(entity_id),
+                ['https://sso.example.com/idp/sso'])
+
+    def test_Saml_init_IdP(self):
+        entity_id = 'https://foo.example.com/sp/metadata'
+        with self.app.test_request_context('/',
+                method='GET'):
+            idp = auth.SamlServer(idp_config)
+            self.assertEqual(idp._config.single_logout_services(
+                entity_id, BINDING_HTTP_REDIRECT),
+                ['https://foo.example.com/sp/slo'])
+            # Since all of the methods which are unique to IdP config are
+            # broken, we'll check to see if one of them is there to confirm
+            # that we loaded the IdP config rather than the SP config.
+            self.assertIsNotNone(
+                getattr(idp._config, 'assertion_consumer_services'))
+            # pysaml2 config assertion_consumer_services method is broken
+            # - https://github.com/rohe/pysaml2/issues/7
+            # pysaml2 config authz_services method is broken
+            # - https://github.com/rohe/pysaml2/issues/8
 
     def test_Saml_authenticate(self):
         # modifying config in this test, make copy so as not to effect
@@ -838,6 +901,36 @@ class TestSaml(unittest.TestCase):
             tmp_sp_config['key_file'] = None
             sp = auth.Saml(tmp_sp_config)
             resp = sp.get_metadata()
+            self.assertTrue(
+                'Content-type: text/xml; charset=utf-8' in str(resp.headers))
+            metadata_xml = resp.data
+            self.assert_(not "Signature" in metadata_xml)
+
+    def test_Saml_get_metadata_IdP(self):
+        entity_id = 'https://foo.example.com/sp/metadata'
+        # modifying config in this test, make copy so as not to effect
+        # following tests.
+        tmp_idp_config = copy.deepcopy(idp_config)
+        # test with defined private key file
+        with self.app.test_request_context('/',
+                method='GET'):
+            idp = auth.SamlServer(tmp_idp_config)
+            resp = idp.get_metadata()
+            self.assertTrue(
+                'Content-type: text/xml; charset=utf-8' in str(resp.headers))
+            metadata_xml = resp.data
+            self.assert_("Signature" in metadata_xml)
+            md = MetaData(tmp_idp_config['xmlsec_binary'])
+            md.import_metadata(metadata_xml, 'idp_config')
+            self.assertEqual(idp._config.single_logout_services(
+                entity_id, BINDING_HTTP_REDIRECT),
+                ['https://foo.example.com/sp/slo'])
+        # test without defined private key file
+        with self.app.test_request_context('/',
+                method='GET'):
+            tmp_idp_config['key_file'] = None
+            idp = auth.SamlServer(tmp_idp_config)
+            resp = idp.get_metadata()
             self.assertTrue(
                 'Content-type: text/xml; charset=utf-8' in str(resp.headers))
             metadata_xml = resp.data
