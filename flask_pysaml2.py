@@ -33,6 +33,83 @@ class AuthException(Exception):
     """Exception for Authentication errors (SAML2)"""
     pass
 
+def _handle_logout_request(client, request, subject_id, binding):
+    """Handle SAML Authentication logout request (GET).
+
+    Args:
+        client (Saml2Client): instance of SAML client class.
+        request (Request): Flask request object for this HTTP transaction.
+        subject_id (string): Id of the subject we are processing the
+            logout for.
+        binding (string): the SAML binding method being used for this
+            request.
+
+    Returns:
+        Flask Response object to return to user containing
+            HTTP_REDIRECT SAML message.
+
+    Raises:
+        BadRequest: when SAML request data is missing.
+        AuthException: when SAML request indicates logout failed.
+    """
+    LOGGER.debug('Received a logout request from Identity Provider')
+
+    # pysaml2 logout_request currently only returns for
+    # BINDING_HTTP_REDIRECT. We will have it fail for anything
+    # other than the header 'Location'
+
+    try:
+        headers, _ = client.logout_request(
+            request.values, subject_id, binding=binding)
+    except TypeError:
+        raise BadRequest('SAML request is invalid')
+    try:
+        assert headers is not None
+        assert headers[0][0] == 'Location'
+        return redirect(headers[0][1])
+    except:
+        raise AuthException('An error occurred during logout')
+
+def _handle_logout_response(client, request, binding, next_url):
+    """Handle SAML Authentication logout response (GET or POST).
+
+    Args:
+        client (Saml2Client): instance of SAML client class.
+        request (Request): Flask request object for this HTTP transaction.
+        binding (string): the SAML binding method being used for this
+            request.
+        next_url (string): URL to get redirected to if all is successful.
+
+    Returns:
+        Flask Response object to return to user containing
+            HTTP_REDIRECT SAML message.
+
+    Raises:
+        BadRequest: when SAML response data is missing.
+        AuthException: when SAML response indicates logout failed.
+    """
+    LOGGER.debug('Received a logout response from Identity Provider')
+    try:
+        saml_response = client.logout_response(
+            request.values['SAMLResponse'], binding=binding)
+    except TypeError:
+        raise BadRequest('SAML response is invalid')
+    LOGGER.debug(saml_response)
+    if saml_response:
+        if saml_response[1] == '': # used SOAP BINDING successfully
+            response = redirect(next_url)
+        else:
+            # body, status, headers
+            response = make_response('\n'.join(saml_response[3]),
+                saml_response[1], saml_response[2])
+            # pysaml2 returns an empty 200 in some cases,
+            # we'll redirect instead
+            if response.status_code == 200 and not response.data:
+                response = redirect(next_url)
+    else:
+        raise AuthException('An error occurred during logout')
+    return response
+
 class Saml(object):
 
     """
@@ -57,8 +134,8 @@ class Saml(object):
             idp_config.load(config['metadata']['config'][0])
             idp_entityid = config['metadata']['config'][0]['entityid']
             idp_metadata_str = str(entity_descriptor(idp_config, 24))
-            LOGGER.debug('IdP XML Metadata for %s: %s' % (
-                idp_entityid, idp_metadata_str))
+            LOGGER.debug('IdP XML Metadata for %s: %s',
+                idp_entityid, idp_metadata_str)
             self._config.metadata.import_metadata(
                 idp_metadata_str, idp_entityid)
         self.attribute_map = {}
@@ -100,13 +177,12 @@ class Saml(object):
                     'Signature requested for this Saml authentication request,'
                     ' but no private key file configured')
 
-        LOGGER.debug('Connecting to Identity Provider %s' % idp_entityid)
+        LOGGER.debug('Connecting to Identity Provider %s', idp_entityid)
         # retrieve cache
         outstanding_queries_cache = \
             AuthDictCache(session, '_saml_outstanding_queries')
 
-        LOGGER.debug('Outstanding queries cache %s' % (
-            outstanding_queries_cache))
+        LOGGER.debug('Outstanding queries cache %s', outstanding_queries_cache)
 
         # make pysaml2 call to authenticate
         client = Saml2Client(self._config, logger=LOGGER)
@@ -120,26 +196,26 @@ class Saml(object):
         # check for it and act accordingly.
 
         if binding == BINDING_HTTP_REDIRECT:
-            LOGGER.debug('Redirect to Identity Provider %s ( %s )' % (
-                idp_entityid, result))
+            LOGGER.debug('Redirect to Identity Provider %s ( %s )',
+                idp_entityid, result)
             response = make_response('', 302, dict([result]))
         elif binding == BINDING_HTTP_POST:
             LOGGER.warn('POST binding used to authenticate is not currently'
                 ' supported by pysaml2 release version. Fix in place in repo.')
-            LOGGER.debug('Post to Identity Provider %s ( %s )' % (
-                idp_entityid, result))
+            LOGGER.debug('Post to Identity Provider %s ( %s )',
+                idp_entityid, result)
             response = make_response('\n'.join(result), 200)
         else:
             raise BadRequest('Invalid result returned from SAML client')
 
         LOGGER.debug(
-            'Saving session_id ( %s ) in outstanding queries' % session_id)
+            'Saving session_id ( %s ) in outstanding queries', session_id)
         # cache the outstanding query
         outstanding_queries_cache.update({session_id: next_url})
         outstanding_queries_cache.sync()
 
-        LOGGER.debug('Outstanding queries cache %s' % (
-            session['_saml_outstanding_queries']))
+        LOGGER.debug('Outstanding queries cache %s',
+            session['_saml_outstanding_queries'])
 
         return response
 
@@ -164,9 +240,8 @@ class Saml(object):
             AuthDictCache(session, '_saml_outstanding_queries')
         identity_cache = IdentityCache(session, '_saml_identity')
 
-        LOGGER.debug('Outstanding queries cache %s' % (
-            outstanding_queries_cache))
-        LOGGER.debug('Identity cache %s' % identity_cache)
+        LOGGER.debug('Outstanding queries cache %s', outstanding_queries_cache)
+        LOGGER.debug('Identity cache %s', identity_cache)
 
         # use pysaml2 to process the SAML authentication response
         client = Saml2Client(self._config, identity_cache=identity_cache,
@@ -183,7 +258,7 @@ class Saml(object):
         outstanding_queries_cache.sync()
         # retrieve session_info
         saml_session_info = saml_response.session_info()
-        LOGGER.debug('SAML Session Info ( %s )' % saml_session_info)
+        LOGGER.debug('SAML Session Info ( %s )', saml_session_info)
         # retrieve user data via API
         try:
             if self.attribute_map.get('uid', 'name_id') == 'name_id':
@@ -199,13 +274,13 @@ class Saml(object):
         # set subject Id in cache to retrieved name_id
         session['_saml_subject_id'] = saml_session_info.get('name_id')
 
-        LOGGER.debug('Outstanding queries cache %s' % (
-            session['_saml_outstanding_queries']))
-        LOGGER.debug('Identity cache %s' % session['_saml_identity'])
-        LOGGER.debug('Subject Id %s' % session['_saml_subject_id'])
+        LOGGER.debug('Outstanding queries cache %s',
+            session['_saml_outstanding_queries'])
+        LOGGER.debug('Identity cache %s', session['_saml_identity'])
+        LOGGER.debug('Subject Id %s', session['_saml_subject_id'])
 
         relay_state = request.form.get('RelayState', '/')
-        LOGGER.debug('Returning redirect to %s' % relay_state)
+        LOGGER.debug('Returning redirect to %s', relay_state)
         return user_id, user_attributes, redirect(relay_state)
 
     def logout(self, next_url='/'):
@@ -220,7 +295,7 @@ class Saml(object):
                 HTTP_REDIRECT or HTTP_POST SAML message.
 
         Raises:
-            AuthException: when unable to resolve Identity Provider single logout end-point.
+            AuthException: Can not resolve IdP single logout end-point.
         """
         # retrieve cache
         state_cache = AuthDictCache(session, '_saml_state')
@@ -237,9 +312,9 @@ class Saml(object):
                     'Signature requested for this Saml logout request,'
                     ' but no private key file configured')
 
-        LOGGER.debug('State cache %s' % state_cache)
-        LOGGER.debug('Identity cache %s' % identity_cache)
-        LOGGER.debug('Subject Id %s' % subject_id)
+        LOGGER.debug('State cache %s', state_cache)
+        LOGGER.debug('Identity cache %s', identity_cache)
+        LOGGER.debug('Subject Id %s', subject_id)
 
         # use pysaml2 to initiate the SAML logout request
         client = Saml2Client(self._config, state_cache=state_cache,
@@ -250,8 +325,8 @@ class Saml(object):
         # sync the state to cache
         state_cache.sync()
 
-        LOGGER.debug('State cache %s' % session['_saml_state'])
-        LOGGER.debug('Identity cache %s' % session['_saml_identity'])
+        LOGGER.debug('State cache %s', session['_saml_state'])
+        LOGGER.debug('Identity cache %s', session['_saml_identity'])
 
         if saml_response[1] == "": # used SOAP BINDING successfully
             return redirect(next_url)
@@ -260,83 +335,6 @@ class Saml(object):
             ' logout process')
         return make_response('\n'.join(saml_response[3]),
             saml_response[1], saml_response[2]) # body, status, headers
-
-    def _handle_logout_request(self, client, request, subject_id, binding):
-        """Handle SAML Authentication logout request (GET).
-
-        Args:
-            client (Saml2Client): instance of SAML client class.
-            request (Request): Flask request object for this HTTP transaction.
-            subject_id (string): Id of the subject we are processing the
-                logout for.
-            binding (string): the SAML binding method being used for this
-                request.
-
-        Returns:
-            Flask Response object to return to user containing
-                HTTP_REDIRECT SAML message.
-
-        Raises:
-            BadRequest: when SAML request data is missing.
-            AuthException: when SAML request indicates logout failed.
-        """
-        LOGGER.debug('Received a logout request from Identity Provider')
-
-        # pysaml2 logout_request currently only returns for
-        # BINDING_HTTP_REDIRECT. We will have it fail for anything
-        # other than the header 'Location'
-
-        try:
-            headers, _success = client.logout_request(
-                request.values, subject_id, binding=binding)
-        except TypeError:
-            raise BadRequest('SAML request is invalid')
-        try:
-            assert headers is not None
-            assert headers[0][0] == 'Location'
-            return redirect(headers[0][1])
-        except:
-            raise AuthException('An error occurred during logout')
-
-    def _handle_logout_response(self, client, request, binding, next_url):
-        """Handle SAML Authentication logout response (GET or POST).
-
-        Args:
-            client (Saml2Client): instance of SAML client class.
-            request (Request): Flask request object for this HTTP transaction.
-            binding (string): the SAML binding method being used for this
-                request.
-            next_url (string): URL to get redirected to if all is successful.
-
-        Returns:
-            Flask Response object to return to user containing
-                HTTP_REDIRECT SAML message.
-
-        Raises:
-            BadRequest: when SAML response data is missing.
-            AuthException: when SAML response indicates logout failed.
-        """
-        LOGGER.debug('Received a logout response from Identity Provider')
-        try:
-            saml_response = client.logout_response(
-                request.values['SAMLResponse'], binding=binding)
-        except TypeError:
-            raise BadRequest('SAML response is invalid')
-        LOGGER.debug(saml_response)
-        if saml_response:
-            if saml_response[1] == '': # used SOAP BINDING successfully
-                response = redirect(next_url)
-            else:
-                # body, status, headers
-                response = make_response('\n'.join(saml_response[3]),
-                    saml_response[1], saml_response[2])
-                # pysaml2 returns an empty 200 in some cases,
-                # we'll redirect instead
-                if response.status_code == 200 and not response.data:
-                    response = redirect(next_url)
-        else:
-            raise AuthException('An error occurred during logout')
-        return response
 
     def handle_logout(self, request, next_url='/'):
         """Handle SAML Authentication logout request/response.
@@ -357,9 +355,9 @@ class Saml(object):
         identity_cache = IdentityCache(session, '_saml_identity')
         subject_id = session.get('_saml_subject_id')
 
-        LOGGER.debug('State cache %s' % state_cache)
-        LOGGER.debug('Identity cache %s' % identity_cache)
-        LOGGER.debug('Subject Id %s' % subject_id)
+        LOGGER.debug('State cache %s', state_cache)
+        LOGGER.debug('Identity cache %s', identity_cache)
+        LOGGER.debug('Subject Id %s', subject_id)
 
         # use pysaml2 to complete the SAML logout request
         client = Saml2Client(self._config, state_cache=state_cache,
@@ -376,11 +374,11 @@ class Saml(object):
             raise BadRequest('Unable to find supported binding')
 
         if 'SAMLRequest' in request.values:
-            response = self._handle_logout_request(
-                client, request, subject_id, binding)
+            response = _handle_logout_request(client, request, subject_id,
+                                              binding)
         elif 'SAMLResponse' in request.values:
-            response = self._handle_logout_response(
-                client, request, binding, next_url)
+            response = _handle_logout_response(client, request, binding,
+                                               next_url)
         else:
             raise BadRequest('Unable to find SAMLRequest or SAMLResponse')
 
@@ -390,8 +388,8 @@ class Saml(object):
             session.pop('_saml_subject_id')
         state_cache.sync()
 
-        LOGGER.debug('State cache %s' % session['_saml_state'])
-        LOGGER.debug('Identity cache %s' % session['_saml_identity'])
+        LOGGER.debug('State cache %s', session['_saml_state'])
+        LOGGER.debug('Identity cache %s', session['_saml_identity'])
 
         LOGGER.debug(
             'Returning redirect to complete/continue the logout process')
@@ -401,7 +399,8 @@ class Saml(object):
         """Returns SAML Service Provider Metadata"""
         edesc = entity_descriptor(self._config, 24)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, 24, None, security_context(self._config))
+            edesc = sign_entity_descriptor(edesc, 24, None,
+                                           security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
         return response
@@ -426,43 +425,63 @@ class SamlServer(object):
         if attribute_map is not None:
             self.attribute_map = attribute_map
 
-    def handle_authn_request(self, request, login_form_cb):
+    def handle_authn_request(self, request,
+                             login_form_cb): # pylint: disable=unused-argument
         """Handles authentication request.
 
         TODO: create default login_form_cb, with unstyled login form?
 
         Args:
             request (Request): Flask request object for this HTTP transaction.
-            login_form_cb (function): Function that displays login form with 
+            login_form_cb (function): Function that displays login form with
                 username and password fields. Takes a single parameter which
-                is the service_provider_id so the form may be styled accordingly.
+                is the service_provider_id so the form may be styled
+                accordingly.
         """
         if 'SAMLRequest' in request.values:
+            # pylint: disable=unused-variable
             details = self._server.parse_authn_request(request.details,
                 BINDING_HTTP_REDIRECT)
             # TODO: check session for already authenticated user
-            # and send authn_response immediately.
-            # TODO: otherwise render login form login_form_cb(service_provider_id)
+            #       and send authn_response immediately.
+            # TODO: otherwise render login form
+            #       login_form_cb(service_provider_id)
         else:
             pass # TODO: bad request?
 
     def get_service_provider_id(self, request):
-        # TODO: pull service_provider_id from session
+        """Get the service Provider's Id applicable to this request.
+
+        TODO: pull service_provider_id from session
+
+        Args:
+            request (Request): Flask request object for this HTTP transaction.
+        """
         pass
 
-    def authn_response(self, userid):
-        service_provider_id = get_service_provider_id()
-        # TODO: send authn_response
-        pass
+    def authn_response(self, request,
+                       userid): # pylint: disable=unused-argument
+        """Send Authentication Response.
+
+        TODO: send authn_response
+
+        Args:
+            request (Request): Flask request object for this HTTP transaction.
+            userid (string): The user's Id to send back with the response.
+        """
+        # pylint: disable=unused-variable
+        service_provider_id = self.get_service_provider_id(request)
 
     def get_metadata(self):
         """Returns SAML Identity Provider Metadata"""
         edesc = entity_descriptor(self._config, 24)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, 24, None, security_context(self._config))
+            edesc = sign_entity_descriptor(edesc, 24, None,
+                                           security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
         return response
+
 
 class AuthDictCache(dict):
 
