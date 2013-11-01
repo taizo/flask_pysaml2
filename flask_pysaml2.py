@@ -208,12 +208,13 @@ class Saml(object):
         LOGGER.debug('Returning redirect to %s' % relay_state)
         return user_id, user_attributes, redirect(relay_state)
 
-    def logout(self, next_url='/'):
+    def logout(self, next_url='/', expire=None):
         """Start SAML Authentication logout process.
 
         Args:
             next_url (string): HTTP URL to return user to when logout is
                 complete.
+            expire (struct_time): The latest the log out should happen.
 
         Returns:
             Flask Response object to return to user containing either
@@ -245,7 +246,7 @@ class Saml(object):
         client = Saml2Client(self._config, state_cache=state_cache,
             identity_cache=identity_cache, logger=LOGGER)
         saml_response = client.global_logout(subject_id,
-            return_to=next_url)
+            return_to=next_url, expire=expire)
 
         # sync the state to cache
         state_cache.sync()
