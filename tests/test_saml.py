@@ -475,7 +475,8 @@ class TestSaml(unittest.TestCase):
                 self.fail(
                     'Expected BadRequest on missing SAMLResponse POST var')
             except BadRequest, e:
-                self.assertEqual('400: SAMLResponse missing from POST', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('SAMLResponse missing from POST', e.description)
         # test SAMLResponse via GET
         with self.app.test_request_context('/',
                 method='GET',
@@ -486,7 +487,8 @@ class TestSaml(unittest.TestCase):
                 self.fail(
                     'Expected BadRequest on missing SAMLResponse POST var')
             except BadRequest, e:
-                self.assertEqual('400: SAMLResponse missing from POST', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('SAMLResponse missing from POST', e.description)
         # test invalid SAMLResponse
         with self.app.test_request_context('/',
                 method='POST',
@@ -497,7 +499,8 @@ class TestSaml(unittest.TestCase):
                 self.fail(
                     'Expected BadRequest on invalid SAMLResponse POST var')
             except BadRequest, e:
-                self.assertEqual('400: SAML response is invalid', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('SAML response is invalid', e.description)
         # test on unsigned SAMLResponse when signing is required
         # ~ this test should be failing but appears to not be implemented
         #   properly in pysaml2. Adding test so as to detect failure
@@ -794,8 +797,8 @@ class TestSaml(unittest.TestCase):
                     'Expected BadRequest on missing SAMLResponse'
                     ' GET arg')
             except BadRequest, e:
-                self.assertEqual(
-                    '400: Unable to find supported binding', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('Unable to find supported binding', e.description)
         # test missing SAMLRequest/SAMLResponse in GET
         with self.app.test_request_context('/',
                 method='GET',
@@ -807,8 +810,9 @@ class TestSaml(unittest.TestCase):
                     'Expected BadRequest on missing SAMLRequest/SAMLResponse'
                     ' GET arg')
             except BadRequest, e:
-                self.assertEqual(
-                    '400: Unable to find SAMLRequest or SAMLResponse', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('Unable to find SAMLRequest or SAMLResponse',
+                                 e.description)
         # test missing SAMLRequest/SAMLResponse in POST
         with self.app.test_request_context('/',
                 method='POST',
@@ -824,8 +828,9 @@ class TestSaml(unittest.TestCase):
                     'Expected BadRequest on missing SAMLRequest/SAMLResponse'
                     ' POST data')
             except BadRequest, e:
-                self.assertEqual(
-                    '400: Unable to find SAMLRequest or SAMLResponse', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('Unable to find SAMLRequest or SAMLResponse',
+                                 e.description)
 
     def test_Saml_handle_logout_invalid_SAMLResponse(self):
         # modifying config in this test, make copy so as not to effect
@@ -841,7 +846,8 @@ class TestSaml(unittest.TestCase):
                 self.fail(
                     'Expected BadRequest on invalid SAMLResponse GET arg')
             except BadRequest, e:
-                self.assertEqual('400: SAML response is invalid', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('SAML response is invalid', e.description)
         # test invalid SAMLResponse in POST
         with self.app.test_request_context('/',
                 method='POST',
@@ -856,7 +862,8 @@ class TestSaml(unittest.TestCase):
                 self.fail(
                     'Expected BadRequest on invalid SAMLResponse POST data')
             except BadRequest, e:
-                self.assertEqual('400: SAML response is invalid', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('SAML response is invalid', e.description)
 
     def test_Saml_handle_logout_invalid_SAMLRequest(self):
         # modifying config in this test, make copy so as not to effect
@@ -872,7 +879,8 @@ class TestSaml(unittest.TestCase):
                 self.fail(
                     'Expected BadRequest on invalid SAMLRequest GET arg')
             except BadRequest, e:
-                self.assertEqual('400: SAML request is invalid', str(e))
+                self.assertEqual(400, e.code)
+                self.assertEqual('SAML request is invalid', e.description)
 
     def test_Saml_get_metadata(self):
         entity_id = 'https://sso.example.com/idp/metadata'
