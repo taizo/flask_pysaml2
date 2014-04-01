@@ -385,7 +385,7 @@ class Saml(object):
         # cache the state and remove subject if logout was successful
         success = identity_cache.get_identity(subject_id) == ({}, [])
         if success:
-            session.pop('_saml_subject_id')
+            session.pop('_saml_subject_id', None)
         state_cache.sync()
 
         LOGGER.debug('State cache %s', session['_saml_state'])

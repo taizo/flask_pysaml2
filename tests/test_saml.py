@@ -712,6 +712,9 @@ class TestSaml(unittest.TestCase):
             session['_saml_subject_id'] = 'id-1'
             session['_saml_state'] = {session_id: state}
             success, resp = sp.handle_logout(request, next_url='/next')
+            self.assertEqual(session.get('_saml_identity', None), {})
+            self.assertIsNone(session.get('_saml_subject_id', None))
+            self.assertEqual(session.get('_saml_state', None), {})
             self.assertTrue(success)
             self.assertEqual(resp.status_code, 302)
             self.assertEqual(resp.headers['Location'], '/next')
