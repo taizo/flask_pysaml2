@@ -15,7 +15,7 @@ with open('requirements-testing.txt') as f:
 
 setup(
     name='Flask-Pysaml2',
-    version='1.2', # use single quotes (can be parsed easily)
+    version='1.3', # use single quotes (can be parsed easily)
     url='https://github.com/KaviCorp/flask_pysaml2',
     licence='BSD',
     author='Kavi Corporation',
