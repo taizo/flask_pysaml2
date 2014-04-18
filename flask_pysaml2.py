@@ -59,14 +59,21 @@ def _handle_logout_request(client, request, subject_id, binding):
     # other than the header 'Location'
 
     try:
-        headers, _ = client.logout_request(
-            request.values, subject_id, binding=binding)
+        response = client.handle_logout_request(
+                       request.values["SAMLRequest"],
+                       subject_id, binding=binding,
+                       relay_state=request.values["RelayState"])
     except TypeError:
         raise BadRequest('SAML request is invalid')
+
     try:
-        assert headers is not None
-        assert headers[0][0] == 'Location'
-        return redirect(headers[0][1])
+        assert response['headers'] is not None
+        assert isinstance(response['headers'], list)
+        for header in response['headers']:
+            if isinstance(header, tuple):
+                tag, data = header
+                if tag == 'Location':
+                    return redirect(data)
     except:
         raise AuthException('An error occurred during logout')
 
@@ -90,8 +97,9 @@ def _handle_logout_response(client, request, binding, next_url):
     """
     LOGGER.debug('Received a logout response from Identity Provider')
     try:
-        saml_response = client.logout_response(
-            request.values['SAMLResponse'], binding=binding)
+        response = client.parse_logout_request_response(
+                       request.values["SAMLResponse"], binding)
+        saml_response = client.handle_logout_response(response)
     except TypeError:
         raise BadRequest('SAML response is invalid')
     LOGGER.debug(saml_response)
@@ -125,19 +133,20 @@ class Saml(object):
             config (dict): Service Provider config info in dict form
             attribute_map (dict): Mapping of attribute keys to user data
         """
-        self._config = SPConfig()
-        self._config.load(config)
-        if config['metadata'].get('config'):
+        if config['metadata'].get('inline', None):
             # Hacked in a way to get the IdP metadata from a python dict
             # rather than having to resort to loading XML from file or http.
             idp_config = IdPConfig()
-            idp_config.load(config['metadata']['config'][0])
-            idp_entityid = config['metadata']['config'][0]['entityid']
-            idp_metadata_str = str(entity_descriptor(idp_config, 24))
+            idp_config.load(config['metadata']['inline'])
+            idp_entityid = config['metadata']['inline']['entityid']
+            idp_metadata_str = str(entity_descriptor(idp_config))
             LOGGER.debug('IdP XML Metadata for %s: %s',
                 idp_entityid, idp_metadata_str)
-            self._config.metadata.import_metadata(
-                idp_metadata_str, idp_entityid)
+            config['metadata']['inline'] = [idp_metadata_str]
+
+        self._config = SPConfig().load(config)
+        self._config.setattr('', 'allow_unknown_attributes', True)
+
         self.attribute_map = {}
         if attribute_map is not None:
             self.attribute_map = attribute_map
@@ -162,15 +171,15 @@ class Saml(object):
         """
         # find configured for IdP for requested binding method
         idp_entityid = ''
-        idps = self._config.idps().keys()
+        idps = self._config.metadata.with_descriptor("idpsso")
         for idp in idps:
-            if self._config.single_sign_on_services(idp, binding) != []:
+            if self._config.metadata.single_sign_on_service(idp, binding) != []:
                 idp_entityid = idp
                 break
         if idp_entityid == '':
             raise AuthException('Unable to locate valid IdP for this request')
         # fail if signing requested but no private key configured
-        if self._config.authn_requests_signed == 'true':
+        if self._config.getattr('authn_requests_signed', False) == 'true':
             if not self._config.key_file \
                 or not os.path.exists(self._config.key_file):
                 raise AuthException(
@@ -185,8 +194,8 @@ class Saml(object):
         LOGGER.debug('Outstanding queries cache %s', outstanding_queries_cache)
 
         # make pysaml2 call to authenticate
-        client = Saml2Client(self._config, logger=LOGGER)
-        (session_id, result) = client.authenticate(
+        client = Saml2Client(self._config)
+        (session_id, result) = client.prepare_for_authenticate(
             entityid=idp_entityid,
             relay_state=next_url,
             binding=binding)
@@ -198,7 +207,7 @@ class Saml(object):
         if binding == BINDING_HTTP_REDIRECT:
             LOGGER.debug('Redirect to Identity Provider %s ( %s )',
                 idp_entityid, result)
-            response = make_response('', 302, dict([result]))
+            response = make_response('', 302, dict(result['headers']))
         elif binding == BINDING_HTTP_POST:
             LOGGER.warn('POST binding used to authenticate is not currently'
                 ' supported by pysaml2 release version. Fix in place in repo.')
@@ -244,11 +253,11 @@ class Saml(object):
         LOGGER.debug('Identity cache %s', identity_cache)
 
         # use pysaml2 to process the SAML authentication response
-        client = Saml2Client(self._config, identity_cache=identity_cache,
-            logger=LOGGER)
-        saml_response = client.response(
-            dict(SAMLResponse=request.form['SAMLResponse']),
-            outstanding_queries_cache)
+        client = Saml2Client(self._config, identity_cache=identity_cache)
+        saml_response = client.parse_authn_request_response(
+            request.form['SAMLResponse'],
+            BINDING_HTTP_POST,
+            outstanding=outstanding_queries_cache)
         if saml_response is None:
             raise BadRequest('SAML response is invalid')
         # make sure outstanding query cache is cleared for this session_id
@@ -318,9 +327,8 @@ class Saml(object):
 
         # use pysaml2 to initiate the SAML logout request
         client = Saml2Client(self._config, state_cache=state_cache,
-            identity_cache=identity_cache, logger=LOGGER)
-        saml_response = client.global_logout(subject_id,
-            return_to=next_url)
+            identity_cache=identity_cache)
+        saml_response = client.global_logout(subject_id)
 
         # sync the state to cache
         state_cache.sync()
@@ -328,13 +336,17 @@ class Saml(object):
         LOGGER.debug('State cache %s', session['_saml_state'])
         LOGGER.debug('Identity cache %s', session['_saml_identity'])
 
-        if saml_response[1] == "": # used SOAP BINDING successfully
+        if saml_response.get('1', None) == "": # used SOAP BINDING successfully
             return redirect(next_url)
 
         LOGGER.debug('Returning Response from SAML for continuation of the'
             ' logout process')
-        return make_response('\n'.join(saml_response[3]),
-            saml_response[1], saml_response[2]) # body, status, headers
+        for _, item in saml_response.items():
+            if isinstance(item, tuple):
+                _, htargs = item
+                break
+
+        return make_response('', 302, htargs['headers'])
 
     def handle_logout(self, request, next_url='/'):
         """Handle SAML Authentication logout request/response.
@@ -361,7 +373,7 @@ class Saml(object):
 
         # use pysaml2 to complete the SAML logout request
         client = Saml2Client(self._config, state_cache=state_cache,
-            identity_cache=identity_cache, logger=LOGGER)
+            identity_cache=identity_cache)
         # let's try to figure out what binding is being used and what type of
         # logout call we are handling
         if request.args:
@@ -397,9 +409,9 @@ class Saml(object):
 
     def get_metadata(self):
         """Returns SAML Service Provider Metadata"""
-        edesc = entity_descriptor(self._config, 24)
+        edesc = entity_descriptor(self._config)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, 24, None,
+            edesc = sign_entity_descriptor(edesc, None,
                                            security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
@@ -474,9 +486,9 @@ class SamlServer(object):
 
     def get_metadata(self):
         """Returns SAML Identity Provider Metadata"""
-        edesc = entity_descriptor(self._config, 24)
+        edesc = entity_descriptor(self._config)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, 24, None,
+            edesc = sign_entity_descriptor(edesc, None,
                                            security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
