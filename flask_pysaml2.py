@@ -26,6 +26,7 @@ from saml2.metadata import (entity_descriptor, sign_entity_descriptor)
 from saml2.config import SPConfig, IdPConfig
 from saml2.cache import Cache
 from saml2.sigver import security_context
+from saml2.s_utils import UnsupportedBinding, UnravelError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ def _handle_logout_request(client, request, subject_id, binding):
                        request.values["SAMLRequest"],
                        subject_id, binding=binding,
                        relay_state=request.values["RelayState"])
+    except UnravelError:
+        raise BadRequest('SAML request is invalid')
     except TypeError:
         raise BadRequest('SAML request is invalid')
 
@@ -100,6 +103,8 @@ def _handle_logout_response(client, request, binding, next_url):
         response = client.parse_logout_request_response(
                        request.values["SAMLResponse"], binding)
         saml_response = client.handle_logout_response(response)
+    except UnravelError:
+        raise BadRequest('SAML response is invalid')
     except TypeError:
         raise BadRequest('SAML response is invalid')
     LOGGER.debug(saml_response)
@@ -133,7 +138,8 @@ class Saml(object):
             config (dict): Service Provider config info in dict form
             attribute_map (dict): Mapping of attribute keys to user data
         """
-        if config['metadata'].get('inline', None):
+        if config.get('metadata', None) is not None and \
+            config['metadata'].get('inline', None):
             # Hacked in a way to get the IdP metadata from a python dict
             # rather than having to resort to loading XML from file or http.
             idp_config = IdPConfig()
@@ -171,7 +177,7 @@ class Saml(object):
         """
         # find configured for IdP for requested binding method
         idp_entityid = ''
-        idps = self._config.metadata.with_descriptor("idpsso")
+        idps = self._config.metadata.identity_providers()
         for idp in idps:
             if self._config.metadata.single_sign_on_service(idp, binding) != []:
                 idp_entityid = idp
@@ -179,7 +185,7 @@ class Saml(object):
         if idp_entityid == '':
             raise AuthException('Unable to locate valid IdP for this request')
         # fail if signing requested but no private key configured
-        if self._config.getattr('authn_requests_signed', False) == 'true':
+        if self._config.getattr('authn_requests_signed') == 'true':
             if not self._config.key_file \
                 or not os.path.exists(self._config.key_file):
                 raise AuthException(
@@ -198,6 +204,7 @@ class Saml(object):
         (session_id, result) = client.prepare_for_authenticate(
             entityid=idp_entityid,
             relay_state=next_url,
+            sign=self._config.getattr('authn_requests_signed'),
             binding=binding)
 
         # The psaml2 source for this method indicates that BINDING_HTTP_POST
