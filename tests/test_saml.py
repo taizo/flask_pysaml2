@@ -188,51 +188,53 @@ class TestSaml(unittest.TestCase):
                 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect')
 
     def test_Saml_init_idp_as_config(self):
-        self.skipTest('a')
-
         tmp_sp_config = copy.deepcopy(sp_config)
         entity_id = 'https://sso.example.com/idp/metadata'
-        tmp_sp_config['metadata'] = {
-            'inline': [{
-                'entityid': entity_id,
-                'contact_person': [{
-                    'email_address': 'helpdesk@kavi.com',
-                    'type': 'technical',
-                }],
-                'service': {
-                    'idp': {
-                        'name': 'Test Identity Provider',
-                        'endpoints': {
-                            'single_sign_on_service': [(
-                                'https://sso.example.com/idp/sso',
-                                BINDING_HTTP_REDIRECT)],
-                            'single_logout_service': [(
-                                'https://sso.example.com/idp/slo',
-                                BINDING_HTTP_REDIRECT)],
-                        },
-                        'policy': {
-                            'default': {
-                                'lifetime': {'hours': 24},
-                                'attribute_restrictions': None,
-                                'name_form':
-                                    'urn:oasis:names:tc:SAML:2.0:attrname-format:uri',
-                            },
+        tmp_sp_config['metadata']['inline'] = {
+            'entityid': entity_id,
+            'contact_person': [{
+                'email_address': 'helpdesk@kavi.com',
+                'contact_type': 'technical',
+                },
+            ],
+            'service': {
+                'idp': {
+                    'name': 'Test Identity Provider',
+                    'endpoints': {
+                        'single_sign_on_service': [(
+                            'https://sso.example.com/idp/sso',
+                            BINDING_HTTP_REDIRECT)],
+                        'single_logout_service': [(
+                            'https://sso.example.com/idp/slo',
+                            BINDING_HTTP_REDIRECT)],
+                    },
+                    'policy': {
+                        'default': {
+                            'lifetime': {'hours': 24},
+                            'attribute_restrictions': None,
+                            'name_form':
+                                'urn:oasis:names:tc:SAML:2.0:attrname-format:uri',
                         },
                     },
                 },
-                'cert_file': root_path + '/sso_public.crt',
-            }]
+            },
+            'cert_file': root_path + '/sso_public.crt',
         }
         with self.app.test_request_context('/',
                 method='GET'):
             sp = auth.Saml(tmp_sp_config)
-            self.assertEqual(sp._config.idps(),
-                {entity_id: 'https://sso.example.com/idp/sso'})
-            self.assertEqual(sp._config.single_logout_services(
-                entity_id, BINDING_HTTP_REDIRECT),
-                ['https://sso.example.com/idp/slo'])
-            self.assertEqual(sp._config.single_sign_on_services(entity_id),
-                ['https://sso.example.com/idp/sso'])
+            self.assertIn(entity_id, sp._config.metadata.identity_providers())
+            slo = sp._config.metadata.single_logout_service(
+                entity_id, binding=BINDING_HTTP_REDIRECT, typ='idpsso')[0]
+            self.assertEqual(slo['location'],
+                'https://sso.example.com/idp/slo')
+            self.assertEqual(slo['binding'],
+                'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect')
+            sso = sp._config.metadata.single_sign_on_service(entity_id)[0]
+            self.assertEqual(sso['location'],
+                'https://sso.example.com/idp/sso')
+            self.assertEqual(sso['binding'],
+                'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect')
 
     def test_Saml_init_IdP(self):
         entity_id = 'https://foo.example.com/sp/metadata'
@@ -248,10 +250,8 @@ class TestSaml(unittest.TestCase):
             # that we loaded the IdP config rather than the SP config.
             self.assertIsNotNone(
                 getattr(idp._config.metadata, 'assertion_consumer_service'))
-            # pysaml2 config assertion_consumer_services method is broken
-            # - https://github.com/rohe/pysaml2/issues/7
-            # pysaml2 config authz_services method is broken
-            # - https://github.com/rohe/pysaml2/issues/8
+            acs = idp._config.metadata.assertion_consumer_service(entity_id)
+            self.assertEqual(acs[0]['location'], 'https://foo.example.com/sp/acs')
 
     def test_Saml_authenticate(self):
         # modifying config in this test, make copy so as not to effect
