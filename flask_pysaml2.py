@@ -216,11 +216,11 @@ class Saml(object):
                 idp_entityid, result)
             response = make_response('', 302, dict(result['headers']))
         elif binding == BINDING_HTTP_POST:
-            LOGGER.warn('POST binding used to authenticate is not currently'
-                ' supported by pysaml2 release version. Fix in place in repo.')
-            LOGGER.debug('Post to Identity Provider %s ( %s )',
-                idp_entityid, result)
-            response = make_response('\n'.join(result), 200)
+            #LOGGER.warn('POST binding used to authenticate is not currently'
+                #' supported by pysaml2 release version. Fix in place in repo.')
+            #LOGGER.debug('Post to Identity Provider %s ( %s )',
+                #idp_entityid, result)
+            response = result, 200 #make_response('', 200, dict(result['headers']))
         else:
             raise BadRequest('Invalid result returned from SAML client')
 
@@ -350,10 +350,13 @@ class Saml(object):
             ' logout process')
         for _, item in saml_response.items():
             if isinstance(item, tuple):
-                _, htargs = item
+                http_type, htargs = item
                 break
 
-        return make_response('', 302, htargs['headers'])
+        if http_type == 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST':
+            return htargs, 200
+        else:
+            return make_response('', 302, htargs['headers'])
 
     def handle_logout(self, request, next_url='/'):
         """Handle SAML Authentication logout request/response.
