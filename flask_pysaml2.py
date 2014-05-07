@@ -26,7 +26,7 @@ from saml2.metadata import (entity_descriptor, sign_entity_descriptor)
 from saml2.config import SPConfig, IdPConfig
 from saml2.cache import Cache
 from saml2.sigver import security_context
-from saml2.s_utils import UnsupportedBinding, UnravelError
+from saml2.s_utils import UnravelError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -216,11 +216,10 @@ class Saml(object):
                 idp_entityid, result)
             response = make_response('', 302, dict(result['headers']))
         elif binding == BINDING_HTTP_POST:
-            #LOGGER.warn('POST binding used to authenticate is not currently'
-                #' supported by pysaml2 release version. Fix in place in repo.')
-            #LOGGER.debug('Post to Identity Provider %s ( %s )',
-                #idp_entityid, result)
-            response = result, 200 #make_response('', 200, dict(result['headers']))
+            LOGGER.debug('Post to Identity Provider %s ( %s )',
+                idp_entityid, result)
+            response = result, 200
+            #make_response('', 200, dict(result['headers']))
         else:
             raise BadRequest('Invalid result returned from SAML client')
 
