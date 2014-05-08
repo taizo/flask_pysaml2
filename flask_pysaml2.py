@@ -352,7 +352,7 @@ class Saml(object):
                 http_type, htargs = item
                 break
 
-        if http_type == 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST':
+        if http_type == BINDING_HTTP_POST:
             return htargs, 200
         else:
             return make_response('', 302, htargs['headers'])

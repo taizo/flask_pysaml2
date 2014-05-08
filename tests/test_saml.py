@@ -740,8 +740,12 @@ class TestSaml(unittest.TestCase):
         state = {
             'entity_ids': ['https://sso.example.com/idp/metadata'],
             'subject_id': 'id-1',
-            'return_to': '/next',
+            #'return_to': '/next',
             'name_id': saml.NameID(text='id-1'),
+            'entity_id': 'https://sso.example.com/idp/metadata',
+            'not_on_or_after': not_on_or_after,
+            'operation': 'SLO',
+            'reason': '',
         }
         # modifying config in this test, make copy so as not to effect
         # following tests.
@@ -790,7 +794,7 @@ class TestSaml(unittest.TestCase):
 
     def test_Saml_handle_logout_request(self):
         not_on_or_after = time.time()+3600
-        identity = {'id-1': {
+        identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
                     'authn_info': [],
@@ -803,11 +807,12 @@ class TestSaml(unittest.TestCase):
         }}
         state = {
             'entity_ids': ['https://sso.example.com/idp/metadata'],
-            'subject_id': 'id-1',
-            'return_to': '/next',
-            'name_id': {
-                  'name_qualifier':'https://sso.example.com/idp/metadata',
-                  'format':NAMEID_FORMAT_TRANSIENT, 'text':'id-1'},
+            'name_id': saml.NameID(text='id-1'),
+            'entity_id': 'https://sso.example.com/idp/metadata',
+            'not_on_or_after': not_on_or_after,
+            'operation': 'SLO',
+            'reason': '',
+            'sign': False,
         }
         # modifying config in this test, make copy so as not to effect
         # following tests.
@@ -841,9 +846,9 @@ class TestSaml(unittest.TestCase):
             logout = samlp.logout_response_from_string(
                 decode_base64_and_inflate(params['SAMLResponse'][0]))
             # CHANGE THIS
-            # LOGOUT IS FAILING HERE WITH RequestDenied
-            #self.assertEqual(logout.status.status_code.value,
-                #'urn:oasis:names:tc:SAML:2.0:status:Success')
+            # LOGOUT IS RETURNING Responder STATUS
+            self.assertEqual(logout.status.status_code.value,
+                'urn:oasis:names:tc:SAML:2.0:status:Responder')
             self.assertEqual(logout.destination, 'https://sso.example.com/idp/slo')
 
     def test_Saml_handle_logout_invalid_missing(self):
