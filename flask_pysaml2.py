@@ -64,7 +64,7 @@ def _handle_logout_request(client, request, subject_id, binding):
                        request.values["SAMLRequest"],
                        subject_id, binding=binding,
                        relay_state=request.values["RelayState"])
-    except UnravelError:
+    except (UnravelError, TypeError):
         raise BadRequest('SAML request is invalid')
 
     try:
@@ -101,9 +101,7 @@ def _handle_logout_response(client, request, binding, next_url):
         response = client.parse_logout_request_response(
                        request.values["SAMLResponse"], binding)
         saml_response = client.handle_logout_response(response)
-    except UnravelError:
-        raise BadRequest('SAML response is invalid')
-    except TypeError:
+    except (UnravelError, TypeError):
         raise BadRequest('SAML response is invalid')
     LOGGER.debug(saml_response)
     if saml_response:

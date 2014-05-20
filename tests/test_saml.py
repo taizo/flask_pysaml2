@@ -351,20 +351,12 @@ class TestSaml(unittest.TestCase):
         # test with only allowed IdP not included in metadata file
         with self.app.test_request_context('/',
                 method='GET'):
-            #tmp_sp_config['service']['sp']['idp'] = {'invalid':None}
-            #tmp_sp_config['metadata'] = {'invalid':None}
             sp = auth.Saml(tmp_sp_config)
             try:
                 sp.authenticate(next_url='/next')
-                # CHANGE THIS
-                #self.fail(
-                    #'Expected AuthException on invalid Saml authentication')
             except auth.AuthException, e:
                 self.assertEqual(
                     'Unable to locate valid IdP for this request', str(e))
-            ## outstanding queury cache should still be empty
-            # CHANGE THIS
-            #self.assertEqual(session.get('_saml_outstanding_queries',{}), {})
 
     def test_Saml_authenticate_invalid_config(self):
         # modifying config in this test, make copy so as not to effect
@@ -642,7 +634,7 @@ class TestSaml(unittest.TestCase):
             self.assertFalse(session['_saml_state'][logout.id]['sign'])
 
     def test_Saml_logout_via_post(self):
-        self.skipTest('logout broken')
+        self.skipTest('logout POST broken')
         not_on_or_after = time.time()+3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
