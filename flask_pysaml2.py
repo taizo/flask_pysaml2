@@ -66,8 +66,6 @@ def _handle_logout_request(client, request, subject_id, binding):
                        relay_state=request.values["RelayState"])
     except UnravelError:
         raise BadRequest('SAML request is invalid')
-    except TypeError:
-        raise BadRequest('SAML request is invalid')
 
     try:
         assert response['headers'] is not None
