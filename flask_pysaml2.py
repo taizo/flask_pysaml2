@@ -215,7 +215,6 @@ class Saml(object):
             LOGGER.debug('Post to Identity Provider %s ( %s )',
                 idp_entityid, result)
             response = result, 200
-            #make_response('', 200, dict(result['headers']))
         else:
             raise BadRequest('Invalid result returned from SAML client')
 
