@@ -192,8 +192,10 @@ class TestSaml(unittest.TestCase):
             except TypeError:
                 pass
             sp = auth.Saml(sp_config)
+            # metadata (A single IdP)
             self.assertEqual(sp._config.metadata.identity_providers(),
                 [entity_id])
+            # SP end points
             slo = sp._config.metadata.single_logout_service(
                 entity_id, binding=BINDING_HTTP_REDIRECT, typ='idpsso')[0]
             self.assertEqual(slo['location'],
@@ -205,11 +207,15 @@ class TestSaml(unittest.TestCase):
                 'https://sso.example.com/idp/sso')
             self.assertEqual(sso['binding'],
                 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect')
+            # Configured default IdP and discovery service
+            self.assertEqual([entity_id], sp._config.getattr('idp'))
+            self.assertEqual('https://ds.example.com/disco',
+                             sp.discovery_service_end_point)
 
-    def test_Saml_init_idp_as_config(self):
+    def test_Saml_init_idp_as_inline_dict(self):
         tmp_sp_config = copy.deepcopy(sp_config)
         entity_id = 'https://sso.example.com/idp/metadata'
-        tmp_sp_config['metadata']['inline'] = {
+        tmp_sp_config['metadata']['inline_dict'] = [{
             'entityid': entity_id,
             'contact_person': [{
                 'email_address': 'helpdesk@kavi.com',
@@ -238,7 +244,7 @@ class TestSaml(unittest.TestCase):
                 },
             },
             'cert_file': root_path + '/sso_public.crt',
-        }
+        }]
         with self.app.test_request_context('/',
                 method='GET'):
             sp = auth.Saml(tmp_sp_config)
@@ -254,20 +260,6 @@ class TestSaml(unittest.TestCase):
                 'https://sso.example.com/idp/sso')
             self.assertEqual(sso['binding'],
                 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect')
-
-    def test_Saml_init_IdP(self):
-        entity_id = 'https://foo.example.com/sp/metadata'
-        with self.app.test_request_context('/',
-                method='GET'):
-            idp = auth.SamlServer(idp_config)
-            sls = idp._config.metadata.single_logout_service(
-                entity_id, binding=BINDING_HTTP_REDIRECT, typ='spsso')
-            self.assertEqual(destinations(sls),
-                ['https://foo.example.com/sp/slo'])
-            self.assertIsNotNone(
-                getattr(idp._config.metadata, 'assertion_consumer_service'))
-            acs = idp._config.metadata.assertion_consumer_service(entity_id)
-            self.assertEqual(acs[0]['location'], 'https://foo.example.com/sp/acs')
 
     def test_Saml_authenticate(self):
         # modifying config in this test, make copy so as not to effect
@@ -344,19 +336,92 @@ class TestSaml(unittest.TestCase):
                 sp.authenticate(next_url='/next',
                     binding=BINDING_HTTP_POST)
                 self.fail(
-                    'Expected AuthException on invalid Saml authentication')
+                    'Expected UnsupportedBinding on invalid Saml authentication')
             except UnsupportedBinding, e:
                 self.assertEqual(
                     'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST', str(e))
         # test with only allowed IdP not included in metadata file
         with self.app.test_request_context('/',
                 method='GET'):
+            tmp_sp_config['metadata'] = {}
             sp = auth.Saml(tmp_sp_config)
             try:
                 sp.authenticate(next_url='/next')
+                self.fail(
+                    "Expected AuthException on invalid Saml authentication")
             except auth.AuthException, e:
                 self.assertEqual(
                     'Unable to locate valid IdP for this request', str(e))
+
+    def test_Saml_authenticate_multiple_idps(self):
+        tmp_sp_config = copy.deepcopy(sp_config)
+        entity_id = 'https://sso-alt.example.com/idp/metadata'
+        tmp_sp_config['metadata']['inline_dict'] = [{
+            'entityid': entity_id,
+            'service': {
+                'idp': {
+                    'name': 'Test Identity Provider',
+                    'endpoints': {
+                        'single_sign_on_service': [(
+                            'https://sso.example.com/idp/sso',
+                            BINDING_HTTP_REDIRECT)],
+                        'single_logout_service': [(
+                            'https://sso.example.com/idp/slo',
+                            BINDING_HTTP_REDIRECT)],
+                    },
+                },
+            },
+            'cert_file': root_path + '/sso_public.crt',
+        }]
+        # Remove default idp form SP config.
+        del tmp_sp_config['service']['sp']['idp']
+        with self.app.test_request_context('/',
+                method='GET'):
+            sp = auth.Saml(tmp_sp_config)
+            self.assertEqual(None, sp._config.getattr('idp'))
+            resp = sp.authenticate(next_url='/next')
+            self.assertEqual(resp.status_code, 302)
+            url = urlparse.urlparse(resp.headers['Location'])
+            self.assertEqual(url.hostname, 'ds.example.com')
+            self.assertEqual(url.path, '/disco')
+            params = urlparse.parse_qs(url.query)
+            self.assertEqual(tmp_sp_config['entityid'], params['entityID'][0])
+            self.assertEqual(
+                'https://foo.example.com/sp/disco_resp?session_id=',
+                params['return'][0][:49])
+
+    def test_Saml_authenticate_multiple_idps_with_idp_default(self):
+        tmp_sp_config = copy.deepcopy(sp_config)
+        entity_id = 'https://sso-alt.example.com/idp/metadata'
+        tmp_sp_config['metadata']['inline_dict'] = [{
+            'entityid': entity_id,
+            'service': {
+                'idp': {
+                    'name': 'Test Identity Provider',
+                    'endpoints': {
+                        'single_sign_on_service': [(
+                            'https://sso.example.com/idp/sso',
+                            BINDING_HTTP_REDIRECT)],
+                        'single_logout_service': [(
+                            'https://sso.example.com/idp/slo',
+                            BINDING_HTTP_REDIRECT)],
+                    },
+                },
+            },
+            'cert_file': root_path + '/sso_public.crt',
+        }]
+        with self.app.test_request_context('/',
+                method='GET'):
+            sp = auth.Saml(tmp_sp_config)
+            resp = sp.authenticate(next_url='/next')
+            self.assertEqual(resp.status_code, 302)
+            self.assert_('SAMLRequest' in resp.headers['Location'])
+            url = urlparse.urlparse(resp.headers['Location'])
+            self.assertEqual(url.hostname, 'sso.example.com')
+            self.assertEqual(url.path, '/idp/sso')
+            params = urlparse.parse_qs(url.query)
+            self.assert_('SAMLRequest' in params)
+            self.assertEqual(params['RelayState'], ['/next'])
 
     def test_Saml_authenticate_invalid_config(self):
         # modifying config in this test, make copy so as not to effect
@@ -377,6 +442,47 @@ class TestSaml(unittest.TestCase):
                     ' but no private key file configured', str(e))
             # outstanding queury cache should still be empty
             self.assertEqual(session.get('_saml_outstanding_queries',{}), {})
+
+    def test_Saml_handle_discovery_response(self):
+        session_id = 'a0123456789abcdef0123456789abcdef'
+        tmp_sp_config = copy.deepcopy(sp_config)
+        entity_id = 'https://sso-alt.example.com/idp/metadata'
+        tmp_sp_config['metadata']['inline_dict'] = [{
+            'entityid': entity_id,
+            'service': {
+                'idp': {
+                    'name': 'Test Identity Provider',
+                    'endpoints': {
+                        'single_sign_on_service': [(
+                            'https://sso-alt.example.com/idp/sso',
+                            BINDING_HTTP_REDIRECT)],
+                        'single_logout_service': [(
+                            'https://sso-alt.example.com/idp/slo',
+                            BINDING_HTTP_REDIRECT)],
+                    },
+                },
+            },
+            'cert_file': root_path + '/sso_public.crt',
+        }]
+        # Remove default idp form SP config.
+        del tmp_sp_config['service']['sp']['idp']
+        with self.app.test_request_context('/',
+                method='GET', query_string=dict(
+                    session_id=session_id, entityID=entity_id
+                )):
+            # make the client thing there is outstanding request
+            session['_saml_outstanding_queries'] = {session_id: '/next'}
+            sp = auth.Saml(tmp_sp_config)
+            self.assertEqual(None, sp._config.getattr('idp'))
+            resp = sp.handle_discovery_response(request)
+            self.assertEqual(resp.status_code, 302)
+            self.assert_('SAMLRequest' in resp.headers['Location'])
+            url = urlparse.urlparse(resp.headers['Location'])
+            self.assertEqual(url.hostname, 'sso-alt.example.com')
+            self.assertEqual(url.path, '/idp/sso')
+            params = urlparse.parse_qs(url.query)
+            self.assert_('SAMLRequest' in params)
+            self.assertEqual(params['RelayState'], ['/next'])
 
     def test_Saml_handle_assertion(self):
         ava = {'uid': '123456'}
@@ -406,50 +512,15 @@ class TestSaml(unittest.TestCase):
                     RelayState='/next')):
             # make the client thing there is outstanding request
             session['_saml_outstanding_queries'] = {session_id: '/next'}
-            user_id, user_attributes, resp = sp.handle_assertion(request)
-            self.assertEqual(user_id.text, name_id)
+            user_attributes, resp = sp.handle_assertion(request)
+            self.assertEqual(user_attributes['name_id'][0], name_id)
+            self.assertEqual(user_attributes['uid'][0], '123456')
             self.assertEqual(resp.status_code, 302)
             self.assertEqual(resp.headers['Location'], '/next')
             # outstanding queury cache should now be empty
             self.assertEqual(session.get('_saml_outstanding_queries',{}), {})
             # identity and subject_id should now be set
             self.assertEqual(session.get('_saml_subject_id').text, name_id)
-        # test user_id mapped to 'uid' attribute
-        with self.app.test_request_context('/',
-                method='POST',
-                data=dict(SAMLResponse=base64.b64encode(authn_response),
-                    RelayState='/next')):
-            sp.attribute_map = dict(uid='uid')
-            session['_saml_outstanding_queries'] = {session_id: '/next'}
-            user_id, user_attributes, resp = sp.handle_assertion(request)
-            self.assertEqual(user_id, '123456')
-            # outstanding queury cache should now be empty
-            self.assertEqual(session.get('_saml_outstanding_queries',{}), {})
-            # identity and subject_id should now be set
-            self.assert_(name_id in session.get('_saml_identity').keys()[0])
-            self.assertEqual(session.get('_saml_subject_id').text, name_id)
-        # test user_id mapped to missing attribute
-        with self.app.test_request_context('/',
-                method='POST',
-                data=dict(SAMLResponse=base64.b64encode(authn_response),
-                    RelayState='/next')):
-            sp.attribute_map = dict(uid='invalid')
-            session['_saml_outstanding_queries'] = {session_id: '/next'}
-            try:
-                user_id, user_attributes, resp = \
-                    sp.handle_assertion(request)
-                self.fail('Expected AuthException for invalid attribute name')
-            except auth.AuthException, e:
-                self.assertEqual(
-                    'Unable to find "invalid" attribute in response', str(e))
-            # outstanding queury cache should now be empty
-            self.assertEqual(session.get('_saml_outstanding_queries',{}), {})
-            # identity is still set by internal Saml client call
-            # ~ I feel like maybe this should get cleared if we couldn't
-            #   find an exceptable uid.
-            self.assert_(name_id in session.get('_saml_identity').keys()[0])
-            # subject_id is not set if unable to parse attribute
-            self.assertEqual(session.get('_saml_subject_id'), None)
 
     def test_Saml_handle_assertion_allow_unsolicited(self):
         ava = {'uid': '123456'}
@@ -470,8 +541,8 @@ class TestSaml(unittest.TestCase):
                 data=dict(SAMLResponse=base64.b64encode(authn_response),
                     RelayState='/next')):
             sp = auth.Saml(tmp_sp_config)
-            user_id, user_attributes, resp = sp.handle_assertion(request)
-            self.assertEqual(user_id.text, name_id)
+            user_attributes, resp = sp.handle_assertion(request)
+            self.assertEqual(user_attributes['name_id'][0], name_id)
             self.assertEqual(resp.status_code, 302)
             self.assertEqual(resp.headers['Location'], '/next')
             # identity and subject_id should now be set
@@ -484,8 +555,8 @@ class TestSaml(unittest.TestCase):
                     RelayState='/next')):
             sp = auth.Saml(tmp_sp_config)
             session['_saml_outstanding_queries'] = {session_id: '/next'}
-            user_id, user_attributes, resp = sp.handle_assertion(request)
-            self.assertEqual(user_id.text, name_id)
+            user_attributes, resp = sp.handle_assertion(request)
+            self.assertEqual(user_attributes['name_id'][0], name_id)
             self.assertEqual(resp.status_code, 302)
             self.assertEqual(resp.headers['Location'], '/next')
             # outstanding queury cache should now be empty
@@ -555,7 +626,7 @@ class TestSaml(unittest.TestCase):
             # make the client thing there is outstanding request
             session['_saml_outstanding_queries'] = {session_id: '/next'}
             try:
-                user_id, user_attributes, resp = sp.handle_assertion(request)
+                user_attributes, resp = sp.handle_assertion(request)
             except BadRequest, e:
                 self.assertEqual(400, e.code)
                 self.assertEqual('SAML response is invalid', e.description)
@@ -970,36 +1041,6 @@ class TestSaml(unittest.TestCase):
             tmp_sp_config['key_file'] = None
             sp = auth.Saml(tmp_sp_config)
             resp = sp.get_metadata()
-            self.assertTrue(
-                'Content-type: text/xml; charset=utf-8' in str(resp.headers))
-            metadata_xml = resp.data
-            self.assert_(not "Signature" in metadata_xml)
-
-    def test_Saml_get_metadata_IdP(self):
-        entity_id = 'https://foo.example.com/sp/metadata'
-        # modifying config in this test, make copy so as not to effect
-        # following tests.
-        tmp_idp_config = copy.deepcopy(idp_config)
-        # test with defined private key file
-        with self.app.test_request_context('/',
-                method='GET'):
-            idp = auth.SamlServer(tmp_idp_config)
-            resp = idp.get_metadata()
-            self.assertTrue(
-                'Content-type: text/xml; charset=utf-8' in str(resp.headers))
-            metadata_xml = resp.data
-            self.assert_("Signature" in metadata_xml)
-            idp._config.load(tmp_idp_config)
-            sls = idp._config.metadata.single_logout_service(
-                entity_id, binding=BINDING_HTTP_REDIRECT, typ='spsso')
-            self.assertEqual(destinations(sls),
-                ['https://foo.example.com/sp/slo'])
-        # test without defined private key file
-        with self.app.test_request_context('/',
-                method='GET'):
-            tmp_idp_config['key_file'] = None
-            idp = auth.SamlServer(tmp_idp_config)
-            resp = idp.get_metadata()
             self.assertTrue(
                 'Content-type: text/xml; charset=utf-8' in str(resp.headers))
             metadata_xml = resp.data
