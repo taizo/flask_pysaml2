@@ -16,22 +16,26 @@ License (Modified BSD License), see LICENSE for more details.
 import os
 import logging
 
-from flask import (session, make_response, redirect)
+from flask import session, make_response, redirect
 from werkzeug.exceptions import BadRequest
 
 from saml2 import BINDING_HTTP_REDIRECT, BINDING_HTTP_POST
+from saml2.extension.idpdisc import BINDING_DISCO #pylint: disable=unused-import
 from saml2.client import Saml2Client
-from saml2.server import Server
-from saml2.metadata import (entity_descriptor, sign_entity_descriptor)
+from saml2.metadata import entity_descriptor, sign_entity_descriptor
 from saml2.config import SPConfig, IdPConfig
 from saml2.cache import Cache
 from saml2.sigver import security_context
+from saml2.s_utils import UnravelError, sid
+
 
 LOGGER = logging.getLogger(__name__)
+
 
 class AuthException(Exception):
     """Exception for Authentication errors (SAML2)"""
     pass
+
 
 def _handle_logout_request(client, request, subject_id, binding):
     """Handle SAML Authentication logout request (GET).
@@ -59,14 +63,21 @@ def _handle_logout_request(client, request, subject_id, binding):
     # other than the header 'Location'
 
     try:
-        headers, _ = client.logout_request(
-            request.values, subject_id, binding=binding)
-    except TypeError:
+        response = client.handle_logout_request(
+                       request.values["SAMLRequest"],
+                       subject_id, binding=binding,
+                       relay_state=request.values["RelayState"])
+    except (UnravelError, TypeError):
         raise BadRequest('SAML request is invalid')
+
     try:
-        assert headers is not None
-        assert headers[0][0] == 'Location'
-        return redirect(headers[0][1])
+        assert response['headers'] is not None
+        assert isinstance(response['headers'], list)
+        for header in response['headers']:
+            if isinstance(header, tuple):
+                tag, data = header
+                if tag == 'Location':
+                    return redirect(data)
     except:
         raise AuthException('An error occurred during logout')
 
@@ -90,9 +101,10 @@ def _handle_logout_response(client, request, binding, next_url):
     """
     LOGGER.debug('Received a logout response from Identity Provider')
     try:
-        saml_response = client.logout_response(
-            request.values['SAMLResponse'], binding=binding)
-    except TypeError:
+        response = client.parse_logout_request_response(
+                       request.values["SAMLResponse"], binding)
+        saml_response = client.handle_logout_response(response)
+    except (UnravelError, TypeError):
         raise BadRequest('SAML response is invalid')
     LOGGER.debug(saml_response)
     if saml_response:
@@ -110,6 +122,38 @@ def _handle_logout_response(client, request, binding, next_url):
         raise AuthException('An error occurred during logout')
     return response
 
+def _parse_metadata_dict_to_inline(metadata):
+    """Convert any metadata which included as dict to PySAML2's `inline`
+    type.
+
+    Currently PySAML supports remote, local files, and string IdP metadata to
+    be included in the SP config dict as XML. It is also possible to pull your
+    IdP metadata from local JSON files.
+
+    This function adds the ability to include the IdP metadata directly in the
+    SP config as a dict of IdP attributes by hacking around this PySAML2
+    limitation and converting the dict into XML via PySAML2's IdPConfig class.
+
+    Args:
+        metadata (dict): The IdP metadata this SP is configured for.
+
+    Returns:
+        (dict) config where any metadata `inline_dict` data has been
+            converted to `inline` XML.
+    """
+    if metadata.get('inline_dict', None):
+        metadata['inline'] = metadata.get('inline', [])
+        for _idp in metadata.get('inline_dict'):
+            idp_config = IdPConfig()
+            idp_config.load(_idp)
+            idp_metadata_str = str(entity_descriptor(idp_config))
+            LOGGER.debug('IdP XML Metadata for %s: %s',
+                _idp['entityid'], idp_metadata_str)
+            metadata['inline'].append(idp_metadata_str)
+        del metadata['inline_dict']
+    return metadata
+
+
 class Saml(object):
 
     """
@@ -118,39 +162,34 @@ class Saml(object):
     Implements SAML2 Service Provider functionality for Flask.
     """
 
-    def __init__(self, config, attribute_map=None):
+    def __init__(self, config):
         """Initialize SAML Service Provider.
 
         Args:
             config (dict): Service Provider config info in dict form
-            attribute_map (dict): Mapping of attribute keys to user data
         """
-        self._config = SPConfig()
-        self._config.load(config)
-        if config['metadata'].get('config'):
-            # Hacked in a way to get the IdP metadata from a python dict
-            # rather than having to resort to loading XML from file or http.
-            idp_config = IdPConfig()
-            idp_config.load(config['metadata']['config'][0])
-            idp_entityid = config['metadata']['config'][0]['entityid']
-            idp_metadata_str = str(entity_descriptor(idp_config, 24))
-            LOGGER.debug('IdP XML Metadata for %s: %s',
-                idp_entityid, idp_metadata_str)
-            self._config.metadata.import_metadata(
-                idp_metadata_str, idp_entityid)
-        self.attribute_map = {}
-        if attribute_map is not None:
-            self.attribute_map = attribute_map
+        if config.get('metadata') is not None:
+            config['metadata'] = _parse_metadata_dict_to_inline(
+                    config['metadata'])
+        self._config = SPConfig().load(config)
+        self._config.setattr('', 'allow_unknown_attributes', True)
+        # Set discovery end point, if configured for.
+        if config['service']['sp'].get('ds'):
+            self.discovery_service_end_point = \
+                config['service']['sp'].get('ds')[0]
 
-    def authenticate(self, next_url='/', binding=BINDING_HTTP_REDIRECT):
+    def authenticate(self, next_url='/', binding=BINDING_HTTP_REDIRECT,
+            selected_idp=None):
         """Start SAML Authentication login process.
 
         Args:
             next_url (string): HTTP URL to return user to when authentication
                 is complete.
-            binding (binding): Saml2 binding method to use for request,
-                default BINDING_HTTP_REDIRECT (don't change til HTTP_POST
-                support is complete in pysaml2.
+            binding (binding): Saml2 binding method to use for request.
+                Defaults to BINDING_HTTP_REDIRECT (don't change til HTTP_POST
+                support is complete in pysaml2).
+            selected_idp (string): A specfic IdP that should be used to
+                authenticate. Defaults to `None`.
 
         Returns:
             Flask Response object to return to user containing either
@@ -160,53 +199,64 @@ class Saml(object):
             AuthException: when unable to locate valid IdP.
             BadRequest: when invalid result returned from SAML client.
         """
-        # find configured for IdP for requested binding method
-        idp_entityid = ''
-        idps = self._config.idps().keys()
-        for idp in idps:
-            if self._config.single_sign_on_services(idp, binding) != []:
-                idp_entityid = idp
-                break
-        if idp_entityid == '':
-            raise AuthException('Unable to locate valid IdP for this request')
-        # fail if signing requested but no private key configured
-        if self._config.authn_requests_signed == 'true':
+        # Fail if signing requested but no private key configured.
+        if self._config.getattr('authn_requests_signed') == 'true':
             if not self._config.key_file \
                 or not os.path.exists(self._config.key_file):
                 raise AuthException(
                     'Signature requested for this Saml authentication request,'
                     ' but no private key file configured')
 
-        LOGGER.debug('Connecting to Identity Provider %s', idp_entityid)
-        # retrieve cache
+        # Find configured for IdPs for requested binding method.
+        bindable_idps = []
+        all_idps = self._config.metadata.identity_providers()
+        # Filter IdPs to allowed IdPs, if we have some.
+        if self._config.getattr('idp') is not None:
+            all_idps = list(set(all_idps) & set(self._config.getattr('idp')))
+        # Filter IdPs to selected IdP, if we have one.
+        if selected_idp is not None:
+            all_idps = list(set(all_idps) & set([selected_idp]))
+        # From all IdPs allowed/selected, get the ones we can bind to.
+        for idp in all_idps:
+            if self._config.metadata.single_sign_on_service(idp, binding) != []:
+                bindable_idps.append(idp)
+        if not len(bindable_idps):
+            raise AuthException('Unable to locate valid IdP for this request')
+
+        # Retrieve cache.
         outstanding_queries_cache = \
             AuthDictCache(session, '_saml_outstanding_queries')
-
         LOGGER.debug('Outstanding queries cache %s', outstanding_queries_cache)
 
-        # make pysaml2 call to authenticate
-        client = Saml2Client(self._config, logger=LOGGER)
-        (session_id, result) = client.authenticate(
-            entityid=idp_entityid,
-            relay_state=next_url,
-            binding=binding)
-
-        # The psaml2 source for this method indicates that BINDING_HTTP_POST
-        # should not be used right now to authenticate. Regardless, we'll
-        # check for it and act accordingly.
-
-        if binding == BINDING_HTTP_REDIRECT:
-            LOGGER.debug('Redirect to Identity Provider %s ( %s )',
-                idp_entityid, result)
-            response = make_response('', 302, dict([result]))
-        elif binding == BINDING_HTTP_POST:
-            LOGGER.warn('POST binding used to authenticate is not currently'
-                ' supported by pysaml2 release version. Fix in place in repo.')
-            LOGGER.debug('Post to Identity Provider %s ( %s )',
-                idp_entityid, result)
-            response = make_response('\n'.join(result), 200)
+        if len(bindable_idps) > 1:
+            # Redirect to discovery service
+            (session_id, response) = self._handle_discovery_request()
         else:
-            raise BadRequest('Invalid result returned from SAML client')
+            idp_entityid = bindable_idps[0]
+            LOGGER.debug('Connecting to Identity Provider %s', idp_entityid)
+
+            # Make pysaml2 call to authenticate.
+            client = Saml2Client(self._config)
+            (session_id, result) = client.prepare_for_authenticate(
+                entityid=idp_entityid,
+                relay_state=next_url,
+                sign=self._config.getattr('authn_requests_signed'),
+                binding=binding)
+
+            # The psaml2 source for this method indicates that
+            # BINDING_HTTP_POST should not be used right now to authenticate.
+            # Regardless, we'll check for it and act accordingly.
+
+            if binding == BINDING_HTTP_REDIRECT:
+                LOGGER.debug('Redirect to Identity Provider %s ( %s )',
+                    idp_entityid, result)
+                response = make_response('', 302, dict(result['headers']))
+            elif binding == BINDING_HTTP_POST:
+                LOGGER.debug('Post to Identity Provider %s ( %s )',
+                    idp_entityid, result)
+                response = result, 200
+            else:
+                raise BadRequest('Invalid result returned from SAML client')
 
         LOGGER.debug(
             'Saving session_id ( %s ) in outstanding queries', session_id)
@@ -219,6 +269,66 @@ class Saml(object):
 
         return response
 
+    def _handle_discovery_request(self):
+        """Handle SAML Discovery Service request. This method is called
+        internally by the `authenticate` method when multiple acceptable IdPs
+        are detected.
+
+        Returns:
+            Tuple containing session Id and Flask Response object to return to
+                user containing either HTTP_REDIRECT to configured Discovery
+                Service end point.
+
+        Raises:
+            AuthException: when unable to find discovery response end point.
+        """
+        session_id = sid()
+        try:
+            return_url = self._config.getattr(
+                    'endpoints', 'sp')['discovery_response'][0][0]
+        except KeyError:
+            raise AuthException('Multiple IdPs configured with no' + \
+                                ' configured Discovery response end point.')
+        return_url += "?session_id=%s" % session_id
+        #pylint: disable=star-args
+        disco_url = Saml2Client.create_discovery_service_request(
+                self.discovery_service_end_point,
+                self._config.entityid, **{'return': return_url})
+        LOGGER.debug('Redirect to Discovery Service %s', disco_url)
+        return (session_id, make_response('', 302, {'Location': disco_url}))
+
+    def handle_discovery_response(self, request):
+        """Handle SAML Discovery Service response. This method is basically
+        a wrapper around `authenticate` with a little extra logic for getting
+        the `entityID` out of the request and the next_url and binding that was
+        previously submitted to `authenticate` from the user's session.
+
+        Args:
+            request (Request): Flask request object for this HTTP transaction.
+
+        Returns:
+            Flask Response object to return to user containing either
+                HTTP_REDIRECT or HTTP_POST SAML message.
+
+        Raises:
+            AuthException: when unable to locate valid IdP.
+            BadRequest: when invalid result returned from SAML client.
+        """
+        session_id = request.args.get('session_id')
+        next_url = '/'
+
+        # Retrieve cache. Get `next_url` from cache.
+        outstanding_queries_cache = \
+            AuthDictCache(session, '_saml_outstanding_queries')
+        if session_id in outstanding_queries_cache.keys():
+            next_url = outstanding_queries_cache[session_id]
+            del outstanding_queries_cache[session_id]
+        outstanding_queries_cache.sync()
+        # Get the selected IdP from the Discovery Service response.
+        selected_idp = Saml2Client.parse_discovery_service_response(
+                query=request.query_string)
+        return self.authenticate(next_url=next_url, selected_idp=selected_idp)
+
     def handle_assertion(self, request):
         """Handle SAML Authentication login assertion (POST).
 
@@ -226,8 +336,11 @@ class Saml(object):
             request (Request): Flask request object for this HTTP transaction.
 
         Returns:
-            User Id (string), User attributes (dict), Redirect Flask response
-                object to return user to now that authentication is complete.
+            (tuple) SAML assertion response information (dict) containing the
+                IdP entity id, the subject's name id, and any additional
+                attributes which may have been returned in the assertion, and
+                Redirect Flask response object to return user to now that
+                authentication is complete.
 
         Raises:
             BadRequest: when error with SAML response from Identity Provider.
@@ -244,11 +357,11 @@ class Saml(object):
         LOGGER.debug('Identity cache %s', identity_cache)
 
         # use pysaml2 to process the SAML authentication response
-        client = Saml2Client(self._config, identity_cache=identity_cache,
-            logger=LOGGER)
-        saml_response = client.response(
-            dict(SAMLResponse=request.form['SAMLResponse']),
-            outstanding_queries_cache)
+        client = Saml2Client(self._config, identity_cache=identity_cache)
+        saml_response = client.parse_authn_request_response(
+            request.form['SAMLResponse'],
+            BINDING_HTTP_POST,
+            outstanding=outstanding_queries_cache)
         if saml_response is None:
             raise BadRequest('SAML response is invalid')
         # make sure outstanding query cache is cleared for this session_id
@@ -256,23 +369,21 @@ class Saml(object):
         if session_id in outstanding_queries_cache.keys():
             del outstanding_queries_cache[session_id]
         outstanding_queries_cache.sync()
-        # retrieve session_info
-        saml_session_info = saml_response.session_info()
-        LOGGER.debug('SAML Session Info ( %s )', saml_session_info)
-        # retrieve user data via API
-        try:
-            if self.attribute_map.get('uid', 'name_id') == 'name_id':
-                user_id = saml_session_info.get('name_id')
-            else:
-                user_id = saml_session_info['ava'] \
-                    .get(self.attribute_map.get('uid'))[0]
-        except:
-            raise AuthException('Unable to find "%s" attribute in response' % (
-                self.attribute_map.get('uid', 'name_id')))
-        # Future: map attributes to user info
-        user_attributes = dict()
+
+        saml_subject_id = saml_response.name_id
+        # Assemble SAML assertion info for returning to the method caller.
+        saml_assertion_info = saml_response.get_identity()
+        # Note: SAML assertion attributes can have multiple values so the
+        # values returned for these attributes are lists even if there is only
+        # one entry. For consistency the `name_id` returned with the SAML
+        # assertion information has been included as a single item list.
+        saml_assertion_info['name_id'] = [saml_response.get_subject().text]
+        # The IdP entity id is obviously not an attribute, so no list required.
+        saml_assertion_info['idp_entity_id'] = saml_response.issuer()
+        LOGGER.debug('SAML Session Info ( %s )', saml_assertion_info)
+
         # set subject Id in cache to retrieved name_id
-        session['_saml_subject_id'] = saml_session_info.get('name_id')
+        session['_saml_subject_id'] = saml_subject_id
 
         LOGGER.debug('Outstanding queries cache %s',
             session['_saml_outstanding_queries'])
@@ -281,7 +392,7 @@ class Saml(object):
 
         relay_state = request.form.get('RelayState', '/')
         LOGGER.debug('Returning redirect to %s', relay_state)
-        return user_id, user_attributes, redirect(relay_state)
+        return (saml_assertion_info, redirect(relay_state))
 
     def logout(self, next_url='/'):
         """Start SAML Authentication logout process.
@@ -318,9 +429,8 @@ class Saml(object):
 
         # use pysaml2 to initiate the SAML logout request
         client = Saml2Client(self._config, state_cache=state_cache,
-            identity_cache=identity_cache, logger=LOGGER)
-        saml_response = client.global_logout(subject_id,
-            return_to=next_url)
+            identity_cache=identity_cache)
+        saml_response = client.global_logout(subject_id)
 
         # sync the state to cache
         state_cache.sync()
@@ -328,13 +438,20 @@ class Saml(object):
         LOGGER.debug('State cache %s', session['_saml_state'])
         LOGGER.debug('Identity cache %s', session['_saml_identity'])
 
-        if saml_response[1] == "": # used SOAP BINDING successfully
+        if saml_response.get('1', None) == "": # used SOAP BINDING successfully
             return redirect(next_url)
 
         LOGGER.debug('Returning Response from SAML for continuation of the'
             ' logout process')
-        return make_response('\n'.join(saml_response[3]),
-            saml_response[1], saml_response[2]) # body, status, headers
+        for _, item in saml_response.items():
+            if isinstance(item, tuple):
+                http_type, htargs = item
+                break
+
+        if http_type == BINDING_HTTP_POST:
+            return htargs, 200
+        else:
+            return make_response('', 302, htargs['headers'])
 
     def handle_logout(self, request, next_url='/'):
         """Handle SAML Authentication logout request/response.
@@ -361,7 +478,7 @@ class Saml(object):
 
         # use pysaml2 to complete the SAML logout request
         client = Saml2Client(self._config, state_cache=state_cache,
-            identity_cache=identity_cache, logger=LOGGER)
+            identity_cache=identity_cache)
         # let's try to figure out what binding is being used and what type of
         # logout call we are handling
         if request.args:
@@ -385,7 +502,7 @@ class Saml(object):
         # cache the state and remove subject if logout was successful
         success = identity_cache.get_identity(subject_id) == ({}, [])
         if success:
-            session.pop('_saml_subject_id')
+            session.pop('_saml_subject_id', None)
         state_cache.sync()
 
         LOGGER.debug('State cache %s', session['_saml_state'])
@@ -397,86 +514,9 @@ class Saml(object):
 
     def get_metadata(self):
         """Returns SAML Service Provider Metadata"""
-        edesc = entity_descriptor(self._config, 24)
+        edesc = entity_descriptor(self._config)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, 24, None,
-                                           security_context(self._config))
-        response = make_response(str(edesc))
-        response.headers['Content-type'] = 'text/xml; charset=utf-8'
-        return response
-
-class SamlServer(object):
-    """
-    SAML Wrapper around pysaml2.
-
-    Implements SAML2 Identity Provider functionality for Flask.
-    """
-    def __init__(self, config, attribute_map=None):
-        """Initialize SAML Identity Provider.
-
-        Args:
-            config (dict): Identity Provider config info in dict form
-            attribute_map (dict): Mapping of attribute keys to user data
-        """
-        self._config = IdPConfig()
-        self._config.load(config)
-        self._server = Server(config=self._config)
-        self.attribute_map = {}
-        if attribute_map is not None:
-            self.attribute_map = attribute_map
-
-    def handle_authn_request(self, request,
-                             login_form_cb): # pylint: disable=unused-argument
-        """Handles authentication request.
-
-        TODO: create default login_form_cb, with unstyled login form?
-
-        Args:
-            request (Request): Flask request object for this HTTP transaction.
-            login_form_cb (function): Function that displays login form with
-                username and password fields. Takes a single parameter which
-                is the service_provider_id so the form may be styled
-                accordingly.
-        """
-        if 'SAMLRequest' in request.values:
-            # pylint: disable=unused-variable
-            details = self._server.parse_authn_request(request.details,
-                BINDING_HTTP_REDIRECT)
-            # TODO: check session for already authenticated user
-            #       and send authn_response immediately.
-            # TODO: otherwise render login form
-            #       login_form_cb(service_provider_id)
-        else:
-            pass # TODO: bad request?
-
-    def get_service_provider_id(self, request):
-        """Get the service Provider's Id applicable to this request.
-
-        TODO: pull service_provider_id from session
-
-        Args:
-            request (Request): Flask request object for this HTTP transaction.
-        """
-        pass
-
-    def authn_response(self, request,
-                       userid): # pylint: disable=unused-argument
-        """Send Authentication Response.
-
-        TODO: send authn_response
-
-        Args:
-            request (Request): Flask request object for this HTTP transaction.
-            userid (string): The user's Id to send back with the response.
-        """
-        # pylint: disable=unused-variable
-        service_provider_id = self.get_service_provider_id(request)
-
-    def get_metadata(self):
-        """Returns SAML Identity Provider Metadata"""
-        edesc = entity_descriptor(self._config, 24)
-        if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, 24, None,
+            edesc = sign_entity_descriptor(edesc, None,
                                            security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
@@ -502,6 +542,7 @@ class AuthDictCache(dict):
         objs = {}
         objs.update(self)
         self.session[self.key] = objs
+
 
 class IdentityCache(Cache):
 
