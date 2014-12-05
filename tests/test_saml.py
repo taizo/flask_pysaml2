@@ -261,6 +261,65 @@ class TestSaml(unittest.TestCase):
             self.assertEqual(sso['binding'],
                 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect')
 
+    def test_Saml_init_idp_as_inline_dict_multicert(self):
+        tmp_sp_config = copy.deepcopy(sp_config)
+        entity_id = 'https://sso.example.com/idp/metadata'
+        tmp_sp_config['metadata']['inline_dict'] = [{
+            'entityid': entity_id,
+            'contact_person': [{
+                'email_address': 'helpdesk@kavi.com',
+                'contact_type': 'technical',
+                },
+            ],
+            'service': {
+                'idp': {
+                    'name': 'Test Identity Provider',
+                    'endpoints': {
+                        'single_sign_on_service': [(
+                            'https://sso.example.com/idp/sso',
+                            BINDING_HTTP_REDIRECT)],
+                        'single_logout_service': [(
+                            'https://sso.example.com/idp/slo',
+                            BINDING_HTTP_REDIRECT)],
+                    },
+                    'policy': {
+                        'default': {
+                            'lifetime': {'hours': 24},
+                            'attribute_restrictions': None,
+                            'name_form':
+                                'urn:oasis:names:tc:SAML:2.0:attrname-format:uri',
+                        },
+                    },
+                },
+            },
+            # Note: You can NOT build metadata from a Config object that doesn't
+            # have `cert_file` set. So even if you want to hack in multiple
+            # certs, you still have to pass in a valid path to a file.
+            'cert_file': root_path + '/sso_public.crt',
+            'certs': [
+                {
+                    'cert_file': root_path + '/sso_public.crt',
+                    'use': 'signing',
+                },
+                {
+                    'cert_file': root_path + '/sso_alt_public.crt',
+                    'use': 'both',
+                },
+                {
+                    'cert_data': 'ThisIsNotReallyACertButItIsAString',
+                    'use': 'encryption',
+                },
+            ],
+        }]
+        with self.app.test_request_context('/',
+                method='GET'):
+            sp = auth.Saml(tmp_sp_config)
+            self.assertIn(entity_id, sp._config.metadata.identity_providers())
+            self.assertEqual(2,
+                len(sp._config.metadata.certs(entity_id, "idpsso", "signing")))
+            self.assertEqual(2,
+                len(sp._config.metadata.certs(entity_id, "idpsso", "encryption")))
+
     def test_Saml_authenticate(self):
         # modifying config in this test, make copy so as not to effect
         # following tests.
