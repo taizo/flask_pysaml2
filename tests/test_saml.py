@@ -33,7 +33,8 @@ AUTHN = {
 }
 
 def create_authn_response(session_id, identity=dict(),
-                          sign_response=True, sign_assertion=True):
+                          sign_response=True, sign_assertion=True,
+                          encrypt_assertion=False):
     config = IdPConfig()
     config.load(idp_config)
     idp_server = Server(config=config)
@@ -45,10 +46,13 @@ def create_authn_response(session_id, identity=dict(),
         sp_entity_id='https://foo.example.com/sp/metadata',
         name_id_policy=None,
         userid='Irrelevent',
+        authn=AUTHN,
         sign_response=sign_response,
         sign_assertion=sign_assertion,
-        instance=True,
-        authn=AUTHN)
+        encrypt_cert=None, # TODO: Figure out how to make this work.
+        encrypt_assertion=encrypt_assertion,
+        instance=True
+        )
     if isinstance(authn_response, Response):
         authn_response = authn_response.to_string()
     response = samlp.response_from_string(authn_response)
@@ -580,6 +584,18 @@ class TestSaml(unittest.TestCase):
             self.assertEqual(session.get('_saml_outstanding_queries',{}), {})
             # identity and subject_id should now be set
             self.assertEqual(session.get('_saml_subject_id').text, name_id)
+
+    def test_Saml_handle_assertion_encrypted(self):
+        self.skipTest("Encryption in pysaml2 2.0.0 is possibly broken." + \
+                      " If not, I don't know how to get it not blow up.")
+        ava = {'uid': '123456'}
+        session_id = 'a0123456789abcdef0123456789abcdef'
+        # modifying config in this test, make copy so as not to effect
+        # following tests.
+        tmp_sp_config = copy.deepcopy(sp_config)
+        # create a response to assert upon
+        name_id, authn_response = create_authn_response(session_id, ava,
+                encrypt_assertion=True)
 
     def test_Saml_handle_assertion_allow_unsolicited(self):
         ava = {'uid': '123456'}
