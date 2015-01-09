@@ -549,7 +549,7 @@ class Saml(object):
         """Returns SAML Service Provider Metadata"""
         edesc = entity_descriptor(self._config)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, None,
+            _, edesc = sign_entity_descriptor(edesc, None,
                                            security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
