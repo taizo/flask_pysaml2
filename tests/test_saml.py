@@ -19,6 +19,7 @@ from saml2.authn_context import INTERNETPROTOCOLPASSWORD
 from saml2.saml import NameID, NAMEID_FORMAT_TRANSIENT
 from saml2.samlp import Response
 from saml2.time_util import instant
+from saml2.sigver import SignatureError, SigverError
 
 import flask_pysaml2 as auth
 from sp_config import CONFIG as sp_config
@@ -354,7 +355,9 @@ class TestSaml(unittest.TestCase):
         # test un-signed authentication request
         with self.app.test_request_context('/',
                 method='GET'):
-            tmp_sp_config['key_file'] = None
+            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
+            # TODO fix test when next updating pysaml2
+            tmp_sp_config['key_file'] = root_path + '/sso_public.crt'
             tmp_sp_config['service']['sp']['authn_requests_signed'] = None
             sp = auth.Saml(tmp_sp_config)
             resp = sp.authenticate(next_url='/next')
@@ -493,7 +496,9 @@ class TestSaml(unittest.TestCase):
         # test signed authentication request w/o private key file
         with self.app.test_request_context('/',
                 method='GET'):
-            tmp_sp_config['key_file'] = None
+            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
+            # TODO fix test when next updating pysaml2
+            tmp_sp_config['key_file'] = root_path + '/sso_prviate.key'
             sp = auth.Saml(tmp_sp_config)
             try:
                 sp.authenticate(next_url='/next')
@@ -700,11 +705,13 @@ class TestSaml(unittest.TestCase):
                 pass
             # make the client thing there is outstanding request
             session['_saml_outstanding_queries'] = {session_id: '/next'}
+            # test fails if there is not a missing signature
             try:
                 user_attributes, resp = sp.handle_assertion(request)
-            except BadRequest, e:
-                self.assertEqual(400, e.code)
-                self.assertEqual('SAML response is invalid', e.description)
+                self.fail(
+                    'Expected SignatureError: Signature missing for assertion')
+            except SignatureError, e:
+                self.assertEqual('Signature missing for assertion', str(e))
 
     def test_Saml_logout(self):
         not_on_or_after = time.time()+3600
@@ -753,15 +760,19 @@ class TestSaml(unittest.TestCase):
                 ['https://sso.example.com/idp/metadata'])
             self.assertEqual(session['_saml_state'][logout.id]['operation'],
                 'SLO')
-            self.assertEqual(session['_saml_state'][logout.id]['name_id'].text,
-                'id-1')
+            # name_id is now being coded/decoded
+            self.assertEqual(session['_saml_state'][logout.id]['name_id'],
+                '4=id-1')
             self.assertEqual(session['_saml_state'][logout.id]['reason'],
                 '')
             self.assertTrue(session['_saml_state'][logout.id]['sign'])
         # test unsigned logout request
         with self.app.test_request_context('/',
                 method='GET'):
-            tmp_sp_config['key_file'] = None
+            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
+            # TODO fix test when next updating pysaml2
+            # tmp_sp_config['key_file'] = None
+            tmp_sp_config['key_file'] = ''
             tmp_sp_config['service']['sp']['logout_requests_signed'] = 'false'
             sp = auth.Saml(tmp_sp_config)
             # first need to be logged in, let's pretend
@@ -845,7 +856,10 @@ class TestSaml(unittest.TestCase):
         tmp_sp_config = copy.deepcopy(sp_config)
         with self.app.test_request_context('/',
                 method='GET'):
-            tmp_sp_config['key_file'] = None
+            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
+            # TODO fix test when next updating pysaml2
+            # tmp_sp_config['key_file'] = None
+            tmp_sp_config['key_file'] = ''
             sp = auth.Saml(tmp_sp_config)
             # first need to be logged in, let's pretend
             session['_saml_identity'] = identity
@@ -854,9 +868,8 @@ class TestSaml(unittest.TestCase):
                 sp.logout(next_url='/next')
                 self.fail(
                     'Expected AuthException on invalid Saml logout request')
-            except TypeError, e:
-                self.assertEqual('sequence item 3: expected string or '
-                                 'Unicode, NoneType found', str(e))
+            except SigverError, e:
+                self.assertEqual('Signing failed', str(e))
             except auth.AuthException, e:
                 self.assertEqual(
                     'Signature requested for this Saml logout request,'
@@ -879,7 +892,7 @@ class TestSaml(unittest.TestCase):
             'entity_ids': ['https://sso.example.com/idp/metadata'],
             'subject_id': 'id-1',
             #'return_to': '/next',
-            'name_id': saml.NameID(text='id-1'),
+            'name_id': '4=id-1',
             'entity_id': 'https://sso.example.com/idp/metadata',
             'not_on_or_after': not_on_or_after,
             'operation': 'SLO',
@@ -1113,7 +1126,10 @@ class TestSaml(unittest.TestCase):
         # test without defined private key file
         with self.app.test_request_context('/',
                 method='GET'):
-            tmp_sp_config['key_file'] = None
+            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
+            # TODO fix test when next updating pysaml2
+            # tmp_sp_config['key_file'] = None
+            tmp_sp_config['key_file'] = ''
             sp = auth.Saml(tmp_sp_config)
             resp = sp.get_metadata()
             self.assertTrue(
