@@ -1002,6 +1002,51 @@ class TestSaml(unittest.TestCase):
                 'urn:oasis:names:tc:SAML:2.0:status:Responder')
             self.assertEqual(logout.destination, 'https://sso.example.com/idp/slo')
 
+    def test_Saml_handle_logout_request_no_subject_id(self):
+        not_on_or_after = time.time()+3600
+        identity = {'4=id-1': {
+            'https://sso.example.com/idp/metadata': (
+                not_on_or_after, {
+                    'authn_info': [('urn:oasis:names:tc:SAML:2.0:ac:classes:Password', [])],
+                    'name_id': saml.NameID(text='id-1'),
+                    'not_on_or_after': not_on_or_after,
+                    'came_from': '/next',
+                    'ava': {'uid': ['a123456']}
+                }
+            )
+        }}
+        state = {
+            'entity_ids': ['https://sso.example.com/idp/metadata'],
+            'name_id': saml.NameID(text='id-1'),
+            'entity_id': 'https://sso.example.com/idp/metadata',
+            'not_on_or_after': not_on_or_after,
+            'operation': 'SLO',
+            'reason': '',
+            'sign': False,
+        }
+        # modifying config in this test, make copy so as not to effect
+        # following tests.
+        tmp_sp_config = copy.deepcopy(sp_config)
+        # create a response to assert upon
+        sp = auth.Saml(tmp_sp_config)
+        logout_request = create_logout_request(
+            subject_id='id-1',
+            destination='https://foo.example.com/sp/slo',
+            issuer_entity_id='https://sso.example.com/idp/metadata',
+            req_entity_id='https://sso.example.com/idp/metadata')
+        # test SAMLRequest logout
+        with self.app.test_request_context('/',
+                method='GET',
+                query_string=dict(
+                    SAMLRequest=deflate_and_base64_encode(str(logout_request)),
+                    RelayState=deflate_and_base64_encode(logout_request.id))):
+            # first need to be logged in, let's pretend
+            session['_saml_identity'] = identity
+            session['_saml_subject_id'] = None
+            session['_saml_state'] = {'id-' + logout_request.id: state}
+            success, _ = sp.handle_logout(request, next_url='/next')
+            self.assertTrue(success)
+
     def test_Saml_handle_logout_invalid_missing(self):
         # modifying config in this test, make copy so as not to effect
         # following tests.

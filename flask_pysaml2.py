@@ -532,8 +532,10 @@ class Saml(object):
         else:
             raise BadRequest('Unable to find SAMLRequest or SAMLResponse')
 
-        # cache the state and remove subject if logout was successful
-        success = identity_cache.get_identity(subject_id) == ({}, [])
+        # cache the state and remove subject if logout was successful or
+        # this subject was already logged out.
+        success = not subject_id or \
+                identity_cache.get_identity(subject_id) == ({}, [])
         if success:
             session.pop('_saml_subject_id', None)
         state_cache.sync()
