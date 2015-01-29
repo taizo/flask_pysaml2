@@ -532,8 +532,10 @@ class Saml(object):
         else:
             raise BadRequest('Unable to find SAMLRequest or SAMLResponse')
 
-        # cache the state and remove subject if logout was successful
-        success = identity_cache.get_identity(subject_id) == ({}, [])
+        # cache the state and remove subject if logout was successful or
+        # this subject was already logged out.
+        success = not subject_id or \
+                identity_cache.get_identity(subject_id) == ({}, [])
         if success:
             session.pop('_saml_subject_id', None)
         state_cache.sync()
@@ -549,7 +551,7 @@ class Saml(object):
         """Returns SAML Service Provider Metadata"""
         edesc = entity_descriptor(self._config)
         if self._config.key_file:
-            edesc = sign_entity_descriptor(edesc, None,
+            _, edesc = sign_entity_descriptor(edesc, None,
                                            security_context(self._config))
         response = make_response(str(edesc))
         response.headers['Content-type'] = 'text/xml; charset=utf-8'
