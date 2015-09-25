@@ -27,13 +27,13 @@ CONFIG = {
             # As it is right now, the Discovery service support is rather
             # limited so we are hacking around a bit to get things to work.
             'ds': ['https://ds.example.com/disco'],
-            'logout_requests_signed': 'true',
-            'authn_requests_signed': 'true',
-            'want_assertions_signed': 'true',
+            'logout_requests_signed': True,
+            'authn_requests_signed': True,
+            'want_assertions_signed': True,
             # The following setting allows for handling unsolicited
             # assertions which ironically is the expected behavior according to
             # the SAML 2.0 specification
-            #'allow_unsolicited': 'true',
+            #'allow_unsolicited': True,
         },
     },
     'debug': False,
