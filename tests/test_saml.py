@@ -355,9 +355,6 @@ class TestSaml(unittest.TestCase):
         # test un-signed authentication request
         with self.app.test_request_context('/',
                 method='GET'):
-            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
-            # TODO fix test when next updating pysaml2
-            tmp_sp_config['key_file'] = root_path + '/sso_public.crt'
             tmp_sp_config['service']['sp']['authn_requests_signed'] = None
             sp = auth.Saml(tmp_sp_config)
             resp = sp.authenticate(next_url='/next')
@@ -489,16 +486,14 @@ class TestSaml(unittest.TestCase):
             self.assert_('SAMLRequest' in params)
             self.assertEqual(params['RelayState'], ['/next'])
 
-    def test_Saml_authenticate_invalid_config(self):
+    def test_Saml_authenticate_required_missing_key_file(self):
         # modifying config in this test, make copy so as not to effect
         # following tests.
         tmp_sp_config = copy.deepcopy(sp_config)
         # test signed authentication request w/o private key file
         with self.app.test_request_context('/',
                 method='GET'):
-            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
-            # TODO fix test when next updating pysaml2
-            tmp_sp_config['key_file'] = root_path + '/sso_prviate.key'
+            tmp_sp_config['key_file'] = None
             sp = auth.Saml(tmp_sp_config)
             try:
                 sp.authenticate(next_url='/next')
@@ -769,11 +764,7 @@ class TestSaml(unittest.TestCase):
         # test unsigned logout request
         with self.app.test_request_context('/',
                 method='GET'):
-            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
-            # TODO fix test when next updating pysaml2
-            # tmp_sp_config['key_file'] = None
-            tmp_sp_config['key_file'] = ''
-            tmp_sp_config['service']['sp']['logout_requests_signed'] = 'false'
+            tmp_sp_config['service']['sp']['logout_requests_signed'] = False
             sp = auth.Saml(tmp_sp_config)
             # first need to be logged in, let's pretend
             session['_saml_identity'] = identity
@@ -791,7 +782,6 @@ class TestSaml(unittest.TestCase):
             self.assertFalse(session['_saml_state'][logout.id]['sign'])
 
     def test_Saml_logout_via_post(self):
-        self.skipTest('logout POST broken')
         not_on_or_after = time.time()+3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
@@ -838,7 +828,7 @@ class TestSaml(unittest.TestCase):
                 self.assertEqual(
                     'Unable to retrieve subject id for logout', str(e))
 
-    def test_Saml_logout_invalid_config(self):
+    def test_Saml_logout_required_missing_key_file(self):
         not_on_or_after = time.time()+3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
@@ -856,10 +846,7 @@ class TestSaml(unittest.TestCase):
         tmp_sp_config = copy.deepcopy(sp_config)
         with self.app.test_request_context('/',
                 method='GET'):
-            # bug in pysaml2 2.2.0 https://github.com/rohe/pysaml2/issues/175
-            # TODO fix test when next updating pysaml2
-            # tmp_sp_config['key_file'] = None
-            tmp_sp_config['key_file'] = ''
+            tmp_sp_config['key_file'] = None
             sp = auth.Saml(tmp_sp_config)
             # first need to be logged in, let's pretend
             session['_saml_identity'] = identity

@@ -137,12 +137,8 @@ def _parse_key_descriptors(certs):
     for _cert in certs:
         _cdata = _cert.get('cert_data') or \
             "".join(open(_cert.get('cert_file')).readlines()[1:-1])
-        if _cert.get('use', 'both') == 'both':
-            key_descriptors.extend(
-                    do_key_descriptor(_cdata, _cert.get('use', 'both')))
-        else:
-            key_descriptors.append(
-                    do_key_descriptor(_cdata, _cert.get('use', 'both')))
+        key_descriptors.extend(
+                do_key_descriptor(_cdata, _cdata, _cert.get('use', 'both')))
     return key_descriptors
 
 def _parse_metadata_dict_to_inline(metadata):
@@ -176,7 +172,7 @@ def _parse_metadata_dict_to_inline(metadata):
             entity_desc = entity_descriptor(idp_config)
             # Hack for supporting multiple certificates.
             if _idp.get('certs'):
-                # `certs` config directive overrided `cert_file`.
+                # `certs` config directive overrides `cert_file`.
                 entity_desc.idpsso_descriptor.key_descriptor = \
                         _parse_key_descriptors(_idp['certs'])
             idp_metadata_str = str(entity_desc)
@@ -233,7 +229,7 @@ class Saml(object):
             BadRequest: when invalid result returned from SAML client.
         """
         # Fail if signing requested but no private key configured.
-        if self._config.getattr('authn_requests_signed') == 'true':
+        if self._config.getattr('authn_requests_signed') == True:
             if not self._config.key_file \
                 or not os.path.exists(self._config.key_file):
                 raise AuthException(
@@ -449,7 +445,8 @@ class Saml(object):
         if subject_id is None:
             raise AuthException('Unable to retrieve subject id for logout')
         # fail if signing requested but no private key configured
-        if self._config.logout_requests_signed == 'true':
+        if self._config.getattr('logout_requests_signed') == True:
+            LOGGER.debug('key_file %s', self._config.key_file)
             if not self._config.key_file \
                 or not os.path.exists(self._config.key_file):
                 raise AuthException(
