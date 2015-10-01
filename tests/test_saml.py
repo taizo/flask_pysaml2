@@ -709,7 +709,7 @@ class TestSaml(unittest.TestCase):
                 self.assertEqual('Signature missing for assertion', str(e))
 
     def test_Saml_logout(self):
-        not_on_or_after = time.time()+3600
+        not_on_or_after = int(time.time()) + 3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
@@ -737,13 +737,14 @@ class TestSaml(unittest.TestCase):
             self.assertEqual(url.hostname, 'sso.example.com')
             self.assertEqual(url.path, '/idp/slo')
             params = urlparse.parse_qs(url.query)
+            self.assert_('Signature' in params)
+            self.assert_('SigAlg' in params)
             self.assert_('SAMLRequest' in params)
             logout = samlp.logout_request_from_string(
                 decode_base64_and_inflate(params['SAMLRequest'][0]))
             self.assertEqual(logout.destination,
                 'https://sso.example.com/idp/slo')
             self.assertEqual(logout.name_id.text, 'id-1')
-            self.assertIsNotNone(logout.signature)
             # check the caches still contain data
             self.assertEqual(session['_saml_identity'], identity)
             self.assertEqual(session['_saml_subject_id'].text, 'id-1')
@@ -782,7 +783,7 @@ class TestSaml(unittest.TestCase):
             self.assertFalse(session['_saml_state'][logout.id]['sign'])
 
     def test_Saml_logout_via_post(self):
-        not_on_or_after = time.time()+3600
+        not_on_or_after = int(time.time()) + 3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
@@ -829,7 +830,7 @@ class TestSaml(unittest.TestCase):
                     'Unable to retrieve subject id for logout', str(e))
 
     def test_Saml_logout_required_missing_key_file(self):
-        not_on_or_after = time.time()+3600
+        not_on_or_after = int(time.time()) + 3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
@@ -863,7 +864,7 @@ class TestSaml(unittest.TestCase):
                     ' but no private key file configured', str(e))
 
     def test_Saml_handle_logout_response(self):
-        not_on_or_after = time.time()+3600
+        not_on_or_after = int(time.time()) + 3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
@@ -931,7 +932,7 @@ class TestSaml(unittest.TestCase):
             self.assertEqual(resp.headers['Location'], '/next')
 
     def test_Saml_handle_logout_request(self):
-        not_on_or_after = time.time()+3600
+        not_on_or_after = int(time.time()) + 3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
@@ -990,7 +991,7 @@ class TestSaml(unittest.TestCase):
             self.assertEqual(logout.destination, 'https://sso.example.com/idp/slo')
 
     def test_Saml_handle_logout_request_no_subject_id(self):
-        not_on_or_after = time.time()+3600
+        not_on_or_after = int(time.time()) + 3600
         identity = {'4=id-1': {
             'https://sso.example.com/idp/metadata': (
                 not_on_or_after, {
