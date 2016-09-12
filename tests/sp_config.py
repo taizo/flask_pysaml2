@@ -1,5 +1,6 @@
 import os
 from saml2 import BINDING_HTTP_REDIRECT
+from saml2.extension.idpdisc import BINDING_DISCO
 
 root_path = os.path.dirname(os.path.abspath(__file__))
 
@@ -18,17 +19,21 @@ CONFIG = {
                 'assertion_consumer_service': ['https://foo.example.com/sp/acs'],
                 'single_logout_service': [('https://foo.example.com/sp/slo',
                     BINDING_HTTP_REDIRECT)],
+                'discovery_response': [('https://foo.example.com/sp/disco_resp',
+                    BINDING_DISCO)],
             },
-            'idp': {
-                'https://sso.example.com/idp/metadata' : None,
-            },
-            'logout_requests_signed': 'true',
-            'authn_requests_signed': 'true',
-            'want_assertions_signed': 'true',
+            'idp': ['https://sso.example.com/idp/metadata'],
+            # Assuming that this will change at some point as pysaml2 evolves.
+            # As it is right now, the Discovery service support is rather
+            # limited so we are hacking around a bit to get things to work.
+            'ds': ['https://ds.example.com/disco'],
+            'logout_requests_signed': True,
+            'authn_requests_signed': True,
+            'want_assertions_signed': True,
             # The following setting allows for handling unsolicited
             # assertions which ironically is the expected behavior according to
             # the SAML 2.0 specification
-            #'allow_unsolicited': 'true',
+            #'allow_unsolicited': True,
         },
     },
     'debug': False,
@@ -37,6 +42,8 @@ CONFIG = {
     'cert_file': root_path + '/sso_public.crt',
     'ca_certs': None,
     'metadata': {
-        'local': [root_path + '/idp_metadata.xml'],
+        'local': [
+            root_path + '/idp_metadata.xml',
+        ],
     },
 }

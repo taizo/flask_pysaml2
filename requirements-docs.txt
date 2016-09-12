@@ -1,2 +1,1 @@
-sphinx
-cartouche
+sphinx >= 1.3
