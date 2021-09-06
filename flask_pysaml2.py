@@ -30,7 +30,7 @@ from saml2.config import SPConfig, IdPConfig
 from saml2.cache import Cache
 from saml2.sigver import security_context
 from saml2.s_utils import UnravelError, sid
-
+from saml2.ident import code, decode
 
 LOGGER = logging.getLogger(__name__)
 
@@ -413,7 +413,7 @@ class Saml(object):
         LOGGER.debug("SAML Session Info ( %s )", saml_assertion_info)
 
         # set subject Id in cache to retrieved name_id
-        session['_saml_subject_id'] = saml_subject_id
+        session['_saml_subject_id'] = code(saml_subject_id)
 
         LOGGER.debug("Outstanding queries cache %s",
                      session['_saml_outstanding_queries'])
@@ -536,7 +536,7 @@ class Saml(object):
         # cache the state and remove subject if logout was successful or
         # this subject was already logged out.
         success = not subject_id or \
-            identity_cache.get_identity(subject_id) == ({}, [])
+            identity_cache.get_identity(decode(subject_id)) == ({}, [])
         if success:
             session.pop('_saml_subject_id', None)
         state_cache.sync()
